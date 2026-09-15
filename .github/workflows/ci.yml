@@ -30,6 +30,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
+      - name: No unreviewed egress bypass
+        run: |
+          # Every unwrap_unchecked is a deliberate review decision (§8.1.1).
+          # This fails the build when a new one appears, so it cannot become habit.
+          count=$(grep -rn 'unwrap_unchecked(' app worker | grep -v 'def unwrap_unchecked' | wc -l)
+          echo "unwrap_unchecked call sites: $count"
+          test "$count" -le 0 || { echo "New egress bypass added — review required"; exit 1; }
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy app worker

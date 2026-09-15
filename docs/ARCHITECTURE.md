@@ -1,15 +1,21 @@
 # Documentation Intelligence AI — Technical Design
 
-Status: **revision 2 — incorporates the first architecture review.** No implementation has started
-(per §47 STEP 1–2 of the brief). Awaiting second review before the STEP 1 skeleton.
+Status: **revision 3 — incorporates the second architecture review.**
+**STEP 1 (skeleton) is implemented and committed**; STEP 2 (schema) has not started.
 
-Changes in this revision: the `english` full-text inversion is now **empirically verified on
-PostgreSQL 16.13** and is worse than first described (§9.1); a data classification policy governs
-which provider may ever see a document (§8.1.1); release ordering made scheme-tolerant (§3.1.1); embeddings moved to
-per-model tables with an online re-embedding path (§3.6); PDF library re-evaluated on licence and
-capability, reversing the initial choice (§4.1); embedding provider decision recorded with its
-disclosure surface (§8.1); open decisions consolidated (§21); project structure and an exact
-STEP 1 plan added (§22, §24).
+The previous revision said "no implementation has started". That was true when written and
+became stale when STEP 1 was built. The second review caught the discrepancy, which is the
+correct catch: a design document that misstates the state of the work is a liability, since
+every later claim inherits its credibility. What is built is listed in §24.
+
+Changes in this revision: the classification policy is generalised from embeddings to **all
+providers that can receive document content** — answering model, reranker, vision, OCR — and
+renamed accordingly (§8.1.1); the unproven claim "there is no code path" is replaced by the
+mechanism and the tests that support it; the `english` full-text inversion is **empirically
+verified on PostgreSQL 16.13** and is worse than first described (§9.1); release ordering made
+scheme-tolerant (§3.1.1); embeddings moved to per-model tables with an online re-embedding path
+(§3.6); PDF library re-evaluated on licence and capability, reversing the initial choice (§4.1);
+open decisions consolidated (§21); project structure and STEP 1 plan (§22, §24).
 
 Section numbers in `[§n]` refer to the Master Project Brief.
 
@@ -800,18 +806,59 @@ embedding_policy:
 `mode: strict_local` collapses the whole matrix to local regardless of its contents — the
 single-switch posture the review asked for, for an installation that must guarantee no egress.
 
-**Enforcement points** (a policy checked in one place is a policy that will be bypassed in another):
+**Scope: every provider, not just embeddings.** The second review was right that scoping this to
+embeddings was the wrong boundary. Document content reaches the answering model, the reranker, the
+vision model that describes screenshots, OCR, and any future translation or summarisation step —
+each is an egress channel. A policy named `EmbeddingPolicy` would have guaranteed that the next
+provider added was not covered by it. The `Capability` enum enumerates every content-receiving
+role, and a provider cannot be registered without declaring one.
 
-1. **Upload** — a document whose classification no available provider can serve is rejected at
+**Enforcement** (a policy that must be *remembered* is not a control):
+
+1. **Type-level.** Document content is not a bare `str` at the provider boundary; it is
+   `Classified[T]`. A provider cannot be handed content except through `EgressGuard.release`,
+   which checks the policy against *that specific provider*. Resolving a permitted provider and
+   then sending the content elsewhere is checked too, and refused.
+2. **Bypass is conspicuous.** The only way out is `unwrap_unchecked(reason=...)`, which names
+   itself, requires a stated justification at the call site, and is failed by a CI grep so that
+   each occurrence is a review decision rather than a habit.
+3. **Upload.** A document whose classification no configured provider can serve is rejected at
    upload with an explanatory error, not accepted and failed later.
-2. **Ingestion, per batch** — `EmbeddingRouter` resolves the provider *from the document's
-   classification*, never from a global default. There is no code path where a chunk reaches a
-   provider without passing this resolution.
-3. **Startup** — if the policy permits a provider that is not configured, the application refuses
-   to start rather than degrading to whatever is available.
-4. **Audit** — every embedding batch logs `(document_id, classification, provider, chunk_count)`.
-   Whether confidential material has ever left the network becomes an answerable question with
-   evidence, which is what §30's audit requirement is actually for.
+4. **Startup, two independent checks.** Every *required* capability must have a provider permitted
+   for the declared `handles_classification`; and under `strict_local`, the mere *presence* of any
+   cloud provider in any capability fails startup — not "a local one also exists", since a
+   configured cloud provider can be selected by a future code path.
+5. **Audit.** Every release logs `(provider, locality, capability, classification)` and never the
+   content. "Has confidential material ever left the network?" becomes a question with evidence,
+   which is what §30's audit requirement is for.
+
+**What is and is not proven.** Revision 2 claimed "there is no code path where a chunk reaches a
+provider without passing this resolution". That was an assertion, not a demonstration, and the
+review was right to reject it. What can be said now: the mechanism makes such a path require a
+deliberate, named, CI-visible act; and the property is exercised as a test matrix over every
+capability × every classification × every policy mode, plus the bypass routes. `EGRESS.md` in the
+repository root is generated by running the real guard and reports whether the property holds.
+That is stronger than an assertion and weaker than a proof, and it should be described as such.
+
+#### The consequence for Claude as the answering model
+
+Extending the policy to `LLMProvider` has an uncomfortable and important result, which the review
+anticipated: **the reference deployment cannot serve confidential documents.** Claude is a cloud
+provider, so a deployment that answers with Claude may hold `internal` content at most.
+
+This is not a defect in the design; it is the design surfacing a real constraint that would
+otherwise have been discovered after indexing the corpus. Holding confidential documentation
+requires local embeddings *and* a local answering model. The shipped defaults therefore declare
+`handles_classification=internal`, while documents still default to `confidential` (§3.3) — so an
+unclassified upload is refused until someone either classifies it down deliberately or configures
+local providers. Both defaults fail closed, in opposite directions, and the tension between them
+is the point.
+
+**Vision is part of this.** Describing a screenshot from a confidential PDF via a cloud vision
+model discloses that page just as surely as embedding its text. Under the matrix, cloud vision is
+blocked for confidential documents; the practical effect is that such documents get no VLM image
+descriptions unless a local vision model is configured, and image retrieval for them falls back to
+caption and surrounding text (§7.2).
 
 The same matrix governs `LLMProvider`, because answering sends retrieved passages to Anthropic. A
 `strict_local` deployment therefore also requires a local answering model — the policy makes that

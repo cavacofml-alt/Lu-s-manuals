@@ -6,10 +6,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.adapters.factory import EmbeddingRouter, build_embedding_providers
+from app.adapters.factory import build_providers
 from app.api.v1.routes import health
 from app.api.v1.routes import router as v1_router
 from app.config import get_settings
+from app.services.egress_guard import EgressGuard
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +18,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    router = EmbeddingRouter(settings.embedding_policy, build_embedding_providers(settings))
-    router.validate_startup(settings.handles_classification)
-    app.state.embedding_router = router
+    guard = EgressGuard(settings.egress_policy, build_providers(settings))
+    guard.validate_startup(settings.handles_classification)
+    app.state.egress_guard = guard
     logger.info(
-        "started: embedding=%s policy=%s pdf=%s",
+        "started: policy=%s handles=%s embedding=%s llm=%s",
+        settings.egress_policy_mode,
+        settings.handles_classification,
         settings.embedding_provider,
-        settings.embedding_policy_mode,
-        settings.pdf_processor,
+        settings.llm_provider,
     )
     yield
 

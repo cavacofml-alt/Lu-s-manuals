@@ -1,8 +1,8 @@
 """Application settings.
 
-Every open architectural decision from docs/ARCHITECTURE.md §21 surfaces here as a
-setting, so that changing one is a configuration change rather than a code change.
-No provider is constructed at import time.
+Every open architectural decision from docs/ARCHITECTURE.md §21 surfaces here, so that
+changing one is configuration rather than code. No provider is constructed at import
+time; all resolve through `build_guard`.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.classification import Classification, EmbeddingPolicy, PolicyMode
+from app.domain.egress import Classification, EgressPolicy, PolicyMode
 
 
 class Settings(BaseSettings):
@@ -22,38 +22,39 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://docintel:docintel@localhost:5432/docintel"
 
-    # §21 D1/D2 — embeddings.
-    # The shipped default is the *safe* one, not the recommended one. Using a cloud
-    # provider is an opt-in that also requires declaring `handles_classification`
-    # below, so disclosure is always a deliberate act rather than an inherited default.
-    embedding_provider: str = "local"  # local | voyage | none
-    embedding_model_id: str = "bge-m3"
+    # ── egress policy (§8.1.1) ────────────────────────────────────────────────
+    egress_policy_mode: PolicyMode = PolicyMode.MIXED
+
+    # The most sensitive tier this deployment may hold. Startup fails unless every
+    # required capability has a provider permitted for it.
+    #
+    # The default is `internal`, not `confidential`, and the reason is worth stating:
+    # the reference deployment answers with Claude, which is a cloud provider, so it
+    # *cannot* honour confidential content. Defaulting to `confidential` here would
+    # mean the default deployment never starts. Defaulting to `internal` instead makes
+    # the limitation explicit and still fails closed, because documents default to
+    # `confidential` (§3.3) and are therefore rejected at upload until someone either
+    # classifies them down deliberately or configures local providers.
+    handles_classification: Classification = Classification.INTERNAL
+
+    # ── providers, one per capability (§21 D1/D2/D7/D8) ───────────────────────
+    embedding_provider: str = "voyage"  # voyage | local_embeddings | none
+    llm_provider: str = "claude"  # claude | local_llm | none
+    rerank_provider: str = "local_reranker"  # local_reranker | cloud_reranker | none
+    vision_provider: str = "claude_vision"  # claude_vision | local_vision | none
+    ocr_provider: str = "tesseract"  # tesseract | cloud_ocr | none
+
+    embedding_model_id: str = "voyage-3"
     embedding_dimensions: int = 1024
 
-    # §8.1.1 — classification policy
-    embedding_policy_mode: PolicyMode = PolicyMode.MIXED
-
-    # The most sensitive classification this deployment is permitted to hold. Startup
-    # fails unless the configured providers can serve it, so a cloud-only deployment
-    # must explicitly lower this — and in doing so states that it will not hold
-    # confidential documents.
-    handles_classification: Classification = Classification.CONFIDENTIAL
-
-    # §21 D3/D4 — document processing
+    # ── §21 D3/D6 ─────────────────────────────────────────────────────────────
     pdf_processor: str = "pdfium"  # pdfium | pymupdf
-
-    # §21 D6 — storage
     storage_backend: str = "local_fs"  # local_fs | s3
     storage_root: str = "./var/storage"
 
-    # §21 D7/D8 — answering
-    llm_provider: str = "claude"
-    llm_model_id: str = "claude-opus-5"
-    reranker: str = "cross_encoder"
-
     @property
-    def embedding_policy(self) -> EmbeddingPolicy:
-        return EmbeddingPolicy(mode=self.embedding_policy_mode)
+    def egress_policy(self) -> EgressPolicy:
+        return EgressPolicy(mode=self.egress_policy_mode)
 
 
 @lru_cache

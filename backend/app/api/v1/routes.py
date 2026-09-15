@@ -31,11 +31,12 @@ def health() -> dict[str, Any]:
         "status": "ok" if database["connected"] and not database["missing"] else "degraded",
         "database": database,
         "config": {
+            "egress_policy_mode": settings.egress_policy_mode,
+            "handles_classification": settings.handles_classification,
             "embedding_provider": settings.embedding_provider,
-            "embedding_policy_mode": settings.embedding_policy_mode,
-            "pdf_processor": settings.pdf_processor,
-            "storage_backend": settings.storage_backend,
             "llm_provider": settings.llm_provider,
+            "vision_provider": settings.vision_provider,
+            "pdf_processor": settings.pdf_processor,
         },
     }
 

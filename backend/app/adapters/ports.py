@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, BinaryIO, Protocol, runtime_checkable
 
-from app.domain.classification import Locality
+from app.domain.egress import Locality
 
 Vector = list[float]
 
