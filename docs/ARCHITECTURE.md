@@ -1,7 +1,13 @@
 # Documentation Intelligence AI — Technical Design
 
-Status: **proposal, awaiting review.** No implementation has started (per §47 STEP 1–2 of the
-brief). This document is the artifact to review before any code is written.
+Status: **revision 2 — incorporates the first architecture review.** No implementation has started
+(per §47 STEP 1–2 of the brief). Awaiting second review before the STEP 1 skeleton.
+
+Changes in this revision: release ordering made scheme-tolerant (§3.1.1); embeddings moved to
+per-model tables with an online re-embedding path (§3.6); PDF library re-evaluated on licence and
+capability, reversing the initial choice (§4.1); embedding provider decision recorded with its
+disclosure surface (§8.1); open decisions consolidated (§21); project structure and an exact
+STEP 1 plan added (§22, §24).
 
 Section numbers in `[§n]` refer to the Master Project Brief.
 
@@ -25,8 +31,12 @@ The three decisions that determine whether this project succeeds or fails are:
 Everything else — OCR, images, export, the viewer — is engineering work with known shapes.
 
 **Recommended stack:** Python 3.12 / FastAPI / SQLAlchemy 2.x / PostgreSQL 16 + pgvector /
-PyMuPDF / Tesseract (fallback) / Claude Opus 5 for answering / React + Vite + pdf.js.
+pypdfium2 + pdfplumber (permissively licensed — see §4.1) / Tesseract (OCR fallback) /
+Claude Opus 5 for answering / React + Vite + pdf.js.
 No Redis, no Celery, no separate vector DB, no object store in the MVP. Rationale throughout.
+
+Decisions still open, and what binds them, are consolidated in **§21 Open Architectural
+Decisions**. Nothing in that list blocks STEP 1.
 
 ---
 
@@ -124,8 +134,8 @@ class AnswerRenderer(Protocol):           # PDF, email, future formats
 ```
 
 `EmbeddingProvider.model_id` and `.dimensions` are part of the interface deliberately: embeddings
-are only comparable within a single model, so the model identity must be persisted alongside every
-vector (§3.6).
+are only comparable within a single model, so the model identity determines which table a vector is
+written to and read from, and a dimension mismatch is caught at startup (§3.6).
 
 ---
 
@@ -157,12 +167,46 @@ page) honest while keeping §8 (don't destroy procedures) satisfied.
 **(c) `release` as a string column on `document_versions` cannot be ordered.**
 [§9, §15, §45 all depend on "which release is newer".] `'7.10' < '7.9'` under string comparison,
 and `'7.4'::float` collapses `7.40` and `7.4`. Release ordering is a business fact that must be
-explicit and editable, so releases become a **first-class table with an integer `sort_key`**.
-This also gives release-level metadata (GA date, supported/EOL status) a home and makes §10
-(release comparison) expressible as a join rather than string parsing.
+explicit and editable, so releases become a **first-class table with an ordering key**. This also
+gives release-level metadata (GA date, supported/EOL status) a home and makes §10 (release
+comparison) expressible as a join rather than string parsing.
 
-I also add `embedding_model` to `chunks` (§3.6), `permissions` primitives (§14), and an
-`image_phash` for cross-release screenshot diffing (§10).
+I also restructure embeddings into their own table (§3.6), add access-control primitives (§3.3),
+and an `image_phash` for cross-release screenshot diffing (§10).
+
+### 3.1.1 Canonical release ordering
+
+The ordering key must survive heterogeneous real-world release labels:
+`7.4`, `7.4.1`, `7.10`, `2026.1`, `R7.4`, `7.4 SP2`. A single integer cannot express these.
+
+**`sort_key` is an `integer[]`.** Postgres compares integer arrays element-wise, which yields
+correct results for every case above, including differing lengths:
+
+| Label | `sort_key` | |
+|---|---|---|
+| `7.4` | `{7,4}` | |
+| `7.4.1` | `{7,4,1}` | `{7,4} < {7,4,1}` ✓ |
+| `7.9` | `{7,9}` | |
+| `7.10` | `{7,10}` | `{7,9} < {7,10}` ✓ — the bug this exists to prevent |
+| `R7.4` | `{7,4}` | prefix is presentation, stripped into `label` |
+| `2026.1` | `{2026,1}` | `{7,10} < {2026,1}` ✓ |
+| `7.4 SP2` | `{7,4,0,2}` | service pack as a trailing component |
+
+Canonicalisation rule: strip non-numeric prefixes/suffixes into the display `label`, split the
+numeric core on `.`, map each component to an integer. The function is deterministic and unit
+tested against the table above.
+
+Two safeguards, because canonicalisation of an unforeseen scheme will eventually be wrong:
+
+- **`sort_key` is stored, not computed at query time.** The parser proposes it; a curator confirms
+  it in the admin UI when registering a release. A wrong ordering is then a visible data fix, not
+  a code deploy.
+- **`sort_override integer[]`** takes precedence when present, for labels no rule can handle, and
+  for the case where an organisation changes numbering scheme mid-life (e.g. `7.x` → `2026.x`)
+  and the arithmetic ordering happens not to match the business ordering.
+
+Ordering across two different numbering schemes is a business fact, not a parsing problem. The
+schema makes it representable and correctable; it does not pretend to infer it.
 
 ### 3.2 Core DDL (proposal)
 
@@ -173,13 +217,17 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- ── Product releases: ordered, first-class ────────────────────────────────
 CREATE TABLE releases (
     id              bigserial PRIMARY KEY,
-    label           text NOT NULL UNIQUE,        -- '7.4'
-    sort_key        integer NOT NULL UNIQUE,     -- 7040  (assigned, not parsed)
+    label           text NOT NULL UNIQUE,        -- 'R7.4'  — as displayed
+    sort_key        integer[] NOT NULL,          -- {7,4}   — see §3.1.1
+    sort_override   integer[],                   -- wins over sort_key when set
     ga_date         date,
     eol_date        date,
     is_current      boolean NOT NULL DEFAULT false,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
+-- effective ordering key, used everywhere recency is compared
+CREATE VIEW release_order AS
+    SELECT id, label, coalesce(sort_override, sort_key) AS ord FROM releases;
 CREATE UNIQUE INDEX ON releases (is_current) WHERE is_current;   -- at most one current
 
 -- ── Document identity (stable across releases) ────────────────────────────
@@ -252,10 +300,33 @@ CREATE TABLE chunks (
     text                text NOT NULL,
     token_count         integer NOT NULL,
     is_ocr              boolean NOT NULL DEFAULT false,
-    embedding_model     text NOT NULL,
-    embedding           vector(1024),
     tsv                 tsvector,                  -- see §9.1 for the configuration
     UNIQUE (document_version_id, chunk_index)
+);
+
+-- Embeddings live apart from chunks so the corpus can be re-embedded with a
+-- different model/provider without touching chunk rows, and so two embedding
+-- sets coexist during a cutover. See §3.6.
+CREATE TABLE embedding_models (
+    id              text PRIMARY KEY,             -- 'voyage-3' | 'bge-m3'
+    provider        text NOT NULL,                -- 'voyage' | 'local'
+    dimensions      integer NOT NULL,
+    table_name      text NOT NULL,                -- concrete table, see below
+    is_active       boolean NOT NULL DEFAULT false,
+    notes           text,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX ON embedding_models (is_active) WHERE is_active;
+
+-- One concrete table per registered model. pgvector requires a FIXED dimension
+-- on the column to build an HNSW index, so a single polymorphic `vector` column
+-- cannot be indexed. Registering a model therefore emits a migration creating
+-- its table and index; the repository layer routes to the active model's table.
+-- Model changes are rare (order of once a year), so a migration per model is an
+-- acceptable price for correct indexing.
+CREATE TABLE chunk_emb_voyage3 (                  -- template
+    chunk_id  bigint PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+    embedding vector(1024) NOT NULL
 );
 
 CREATE TABLE images (
@@ -272,9 +343,13 @@ CREATE TABLE images (
     surrounding_text    text,
     vlm_description     text,                      -- §7.2 — generated at ingest
     kind                text,                      -- screenshot | diagram | table | logo
-    phash               bit(64),                   -- §10 cross-release comparison
-    embedding_model     text,
-    embedding           vector(1024)               -- of caption+description+surrounding
+    phash               bit(64)                    -- §10 cross-release comparison
+);
+
+-- Image vectors follow the same per-model table pattern as chunks.
+CREATE TABLE image_emb_voyage3 (                   -- template
+    image_id  bigint PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+    embedding vector(1024) NOT NULL                -- caption + description + surrounding
 );
 
 CREATE TABLE ingestion_jobs (
@@ -382,12 +457,15 @@ CREATE TABLE audit_log (
 ```sql
 CREATE INDEX chunks_tsv_idx      ON chunks USING gin (tsv);
 CREATE INDEX chunks_trgm_idx     ON chunks USING gin (text gin_trgm_ops);
-CREATE INDEX chunks_embed_idx    ON chunks USING hnsw (embedding vector_cosine_ops)
-                                 WITH (m = 16, ef_construction = 64);
 CREATE INDEX chunks_dv_idx       ON chunks (document_version_id);
-CREATE INDEX images_embed_idx    ON images USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX dv_doc_release_idx  ON document_versions (document_id, release_id);
 CREATE INDEX jobs_claim_idx      ON ingestion_jobs (state, id) WHERE state <> 'ready';
+
+-- created with each per-model embedding table
+CREATE INDEX chunk_emb_voyage3_idx ON chunk_emb_voyage3
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX image_emb_voyage3_idx ON image_emb_voyage3
+    USING hnsw (embedding vector_cosine_ops);
 ```
 
 **HNSW + filtering caveat.** Vector search filtered by release or by ACL can silently lose recall:
@@ -405,12 +483,30 @@ Agreed: binaries do not go in Postgres. But **MinIO/S3 is not warranted for the 
 [§40] for zero MVP benefit. PDFs and images are always served through an authorising API endpoint,
 never a static path [§30].
 
-### 3.6 Embedding model identity
+### 3.6 Re-embedding the corpus
 
-`chunks.embedding_model` exists because vectors from different models are not comparable. When the
-embedding model changes, the correct behaviour is to re-embed the corpus into a new column or table
-and cut over atomically — not to mix. Recording the model makes a partial re-embed detectable rather
-than silently wrong. The same applies to `images.embedding_model`.
+Vectors from different models are not comparable, so "change the embedding model" is never an
+in-place update — it is a corpus migration. The schema above makes that migration safe and
+online, which is a hard requirement from the architecture review:
+
+1. Register the new model in `embedding_models`; the migration creates `chunk_emb_<model>` and
+   its HNSW index. The old model's table is untouched and stays active.
+2. Backfill the new table with a resumable worker job. Retrieval continues to serve from the
+   active model throughout — no downtime, no degraded window.
+3. Validate: row counts match `chunks`, dimensions correct, and the **retrieval eval suite
+   (§17.1) is run against the new model**. This is the point of having the eval suite: a model
+   swap is precisely the kind of change that silently degrades quality [§34].
+4. Flip `is_active` in one transaction. Rollback is flipping it back — the old vectors still
+   exist.
+5. Drop the old table only after a deliberate retention period.
+
+Two consequences worth stating: the corpus can be re-embedded from the stored `chunks.text`
+without re-parsing any PDF, and a **provider switch never requires re-ingestion**. Chunk
+identity, citations, page references and images are all independent of the embedding model.
+
+This is what "no vendor lock-in" means concretely. The `EmbeddingProvider` port makes a provider
+*swappable in code*; this table structure makes it *swappable in production with data already
+indexed*, which is the part that actually costs money if it is not designed in from the start.
 
 ---
 
@@ -423,17 +519,58 @@ upload → validate → checksum → duplicate check → register version
    → embed (batched) → index → validate → READY
 ```
 
-**Library: PyMuPDF (fitz).** It gives text with per-span coordinates and font sizes (needed for
-heading detection and evidence highlighting), embedded image extraction with bounding boxes, page
-rasterisation for OCR, and the table finder — from one dependency. `pdfplumber` is better at ruled
-tables and can be added behind `DocumentProcessor` if the corpus needs it.
+### 4.1 PDF processing library — evaluation and decision
 
-Note the licence: PyMuPDF is AGPL-3.0 or commercial. For an internal, non-distributed deployment
-this is fine, but **you should confirm this is acceptable to your legal/procurement position before
-STEP 4.** If it is not, `pypdfium2` (BSD) plus `pdfplumber` is the fallback, at the cost of weaker
-structure extraction.
+The architecture review declined to approve PyMuPDF on technical convenience alone and asked for a
+comparison across licence, extraction quality, pages, images, tables, OCR, performance, Python
+3.11+ support and deployment. That comparison follows; the conclusion reverses my initial choice.
 
-### 4.1 Job execution — no Celery, no Redis
+| | **PyMuPDF** | **pypdfium2** | **pdfplumber** | **pdfminer.six** | **Docling** |
+|---|---|---|---|---|---|
+| Licence | **AGPL-3.0** or paid commercial | BSD-3/Apache-2.0 | MIT | MIT | MIT |
+| Text + coordinates | Excellent | Good | **Excellent** (char-level) | Good | Good |
+| Font/size metadata (headings) | Excellent | Adequate | Good | Good | **Model-based** |
+| Page fidelity / rasterisation | Excellent | **Excellent** (PDFium) | via conversion | No | Good |
+| Embedded image extraction | **Excellent** (+bbox) | Limited | Metadata/bbox only | No | Good |
+| Tables | Good | None | **Excellent** | None | **Excellent** |
+| Complex/damaged PDFs | Very robust | Very robust (Chromium) | Moderate | Moderate | Moderate |
+| OCR | External | External | External | External | Bundled |
+| Performance | **Fastest** (C) | Fast (C++) | **Slow** (pure Python) | Slow | Slowest (ML) |
+| Python 3.11+ | Yes | Yes | Yes | Yes | Yes |
+| Deployment | Wheels, trivial | Wheels, trivial | Pure Python | Pure Python | **Heavy** (model downloads) |
+
+**The licence question is not marginal, and my earlier framing of it was too casual.**
+AGPL-3.0 §13 is triggered by users interacting with the software *remotely over a network* — which
+is exactly what this system is. The common intuition "it's internal, so we're not distributing"
+addresses the GPL's distribution clause, not the AGPL's network clause. Whether internal-only use
+by employees of the same legal entity engages §13 is a question for your legal function, not for
+me, and not one to leave unresolved under a knowledge platform meant to last years. Artifex sells a
+commercial licence precisely because many companies land in this position.
+
+**Decision: `pypdfium2` + `pdfplumber` + `Pillow` as the default `DocumentProcessor`.**
+All permissive (BSD/Apache/MIT), no legal question to resolve, no procurement step.
+
+Division of labour: pypdfium2 does bulk text extraction and page rasterisation (fast, C++,
+Chromium-grade robustness on malformed files); pdfplumber runs **only on pages where table or
+fine-grained coordinate work is needed**, which contains its performance cost rather than paying
+it per page.
+
+What we give up, honestly: PyMuPDF's embedded-image extraction is better, and it is faster
+overall. The image gap is mitigated by a technique the design already wanted for a different
+reason — **rasterising detected image regions from the rendered page** (§7.1) rather than pulling
+embedded image streams. That approach captures vector-drawn diagrams, which embedded-image
+extraction misses entirely, so the permissively licensed path is actually *better* for the
+diagram case, not merely acceptable.
+
+`PyMuPDFProcessor` remains implementable behind the same port as an **optional extra**, not a
+default dependency, for a deployment that holds an Artifex commercial licence or has concluded
+AGPL is acceptable. The port is what makes this a configuration choice rather than a rewrite.
+
+Docling is the most interesting alternative for structure quality and is MIT-licensed; it is
+rejected for the MVP on deployment weight (ML model downloads, GPU-adjacent runtime) under §40,
+and noted in §21 as a candidate if section detection proves weak on the real corpus.
+
+### 4.2 Job execution — no Celery, no Redis
 
 [§18 asynchronous] I recommend **a Postgres-backed job queue** claimed with
 `SELECT ... FOR UPDATE SKIP LOCKED`, polled by the worker process.
@@ -448,14 +585,14 @@ timeout) covers worker crashes.
 
 If ingestion volume ever justifies a real broker, the port boundary makes that a contained change.
 
-### 4.2 Atomic re-ingestion
+### 4.3 Atomic re-ingestion
 
 Re-processing an existing version must never leave the corpus half-indexed. The job builds all new
 rows, validates them (§4.4), and only then flips `document_versions.state` to `ready` in one
 transaction, marking the prior generation `superseded`. Retrieval filters on `state = 'ready'`, so a
 partially-built version is invisible rather than partially visible.
 
-### 4.3 Idempotency [§19]
+### 4.4 Idempotency [§19]
 
 Two distinct cases, which the brief conflates:
 
@@ -469,7 +606,7 @@ Two distinct cases, which the brief conflates:
 Auto-inferring document identity from filename is unreliable and will eventually merge two unrelated
 manuals. The upload UI should propose an inferred match and **require confirmation** [§29].
 
-### 4.4 Indexing validation
+### 4.5 Indexing validation
 
 Before `READY`, assert: every page has text or an OCR record; chunk count > 0; every chunk has a
 non-null embedding of the expected dimension and model; `cite_page` within `[1, page_count]`; every
@@ -527,16 +664,19 @@ assumption — it is exactly the kind of change the golden dataset exists to jus
 
 ### 7.1 Extraction
 
-Embedded raster images via PyMuPDF with bounding boxes. Filter noise by size, aspect ratio and
+Image regions are located from the page's object layout and **rasterised from the rendered page**
+via pypdfium2, rather than pulled as embedded image streams (§4.1). This is the approach that makes
+vector-drawn diagrams work — they have no embedded raster to extract — so one mechanism covers
+screenshots and diagrams alike. Filter noise by size, aspect ratio and
 repetition across pages (headers/logos appear on every page and are discarded). Captions are
 detected from text runs immediately below/above the bbox matching `Figure|Fig\.|Screenshot|Diagram`
 patterns; when absent, `surrounding_text` is the ±N characters of page text nearest the bbox.
 Each image is written to storage with a thumbnail, and keeps
 `document_version_id + page_number + section_id + bbox` — the §5 association requirement.
 
-Vector-drawn diagrams are not embedded rasters. Where a page region is predominantly vector graphics,
-that region is rasterised as a "diagram" image so the §6 guarantee (show the *original*) holds for
-drawn diagrams too, not just screenshots.
+Rasterisation happens at a resolution high enough for §24 ("preserve reasonable quality",
+"be printable") — 2× the page's nominal scale — with the original bbox retained so the viewer can
+highlight the region in place (§13.2).
 
 ### 7.2 Image retrieval — the part the brief underspecifies
 
@@ -565,37 +705,78 @@ which makes that guarantee structural rather than behavioural.
 
 ## 8. Embedding strategy
 
-### 8.1 The provider question — needs your decision
+### 8.1 Provider decision
 
-**Anthropic does not offer an embeddings API.** Claude is the answering model [§21]; the embedding
-model must come from elsewhere. This has a governance consequence the brief should confront directly,
-because §30 says the documentation may be confidential: *embedding a corpus through a third-party
-API sends the entire corpus to that third party.* For internal operational manuals this is often
-acceptable under an enterprise agreement; sometimes it is categorically not.
+**Anthropic does not offer an embeddings API.** Claude is the answering model [§21]; embeddings
+must come from elsewhere. Since §30 says the documentation may be confidential, this is a data
+governance decision, not only a quality one: *embedding a corpus through a third-party API sends
+the full text of that corpus to the third party.*
 
-Two viable paths:
-
-| | Hosted (e.g. Voyage `voyage-3`) | Self-hosted (`BAAI/bge-m3`) |
+| | Hosted (`voyage-3`) | Self-hosted (`BAAI/bge-m3`) |
 |---|---|---|
 | Retrieval quality | Higher out of the box | Strong; competitive |
-| Corpus leaves network | **Yes** | **No** |
-| Ops burden | None | GPU or slow CPU inference |
-| Cost | Per-token, small | Fixed infra |
+| Corpus text leaves the network | **Yes** | **No** |
+| Ops burden | None | GPU, or slower CPU inference |
+| Cost | Per-token, small | Fixed infrastructure |
 | Multilingual | Good | Excellent |
+| Dimensions | 1024 | 1024 |
 
-**Recommendation:** default to self-hosted `bge-m3` (1024-dim, matching the DDL above) *if* the
-documentation is confidential, because a data-governance problem discovered after indexing 5,000
-documents is extremely expensive to undo. If your legal position permits a hosted provider, take it
-for the better quality. Either way the `EmbeddingProvider` port keeps this reversible, and the
-`embedding_model` column keeps a migration honest.
+**Decision (per architecture review): hosted `voyage-3` as the initial implementation, with
+`LocalEmbeddingProvider` (`bge-m3`) implemented against the same port and a documented,
+tested migration path (§3.6).** Both are 1024-dimensional, so a switch does not even change the
+column type.
 
-**This is the one decision I need from you before STEP 4.**
+**Why `voyage-3` for the initial provider:** strongest retrieval quality per unit of effort on
+technical English documentation, no infrastructure, and a 1024-dimension output matching the
+self-hosted alternative. Chosen over OpenAI `text-embedding-3-large` mainly for that dimensional
+symmetry (3072 dims would make the local fallback a schema change, not a config change).
+
+#### What is sent, and when
+
+Being precise about this, because "we abstracted the provider" is not by itself a privacy control:
+
+| Data | Sent to embedding provider? |
+|---|---|
+| Chunk text (the document body) | **Yes** — this is the entire indexed corpus |
+| Section headings, document titles | **Yes**, as part of the chunk prefix (§6) |
+| OCR text from scanned pages | **Yes** |
+| User questions | **Yes**, at query time (one short string per question) |
+| Original PDF files | No |
+| Extracted images | No |
+| VLM image descriptions | **Yes**, if image embeddings are enabled |
+| Retrieved passages | Separately, to Anthropic, at answer time |
+
+So: **the documentation corpus goes to two external parties** — the embedding provider at ingest
+and Anthropic at answer time. A "no external processing" posture requires replacing both, and the
+ports make that possible; `LLMProvider` is the second one.
+
+#### One caveat I want on the record
+
+The review's position that "embeddings are not irreversible, we can re-embed" is correct about
+**technical** reversibility, and §3.6 now guarantees it. It does not apply to **disclosure**:
+once the corpus has been transmitted, it has been disclosed, and re-embedding locally afterwards
+does not undo that. These are different properties and only the first is under our control.
+
+The practical consequence is a good one, though: since the provider is a configuration value, the
+binding moment is **the first ingestion of real confidential documents**, not the writing of code.
+Development and evaluation can proceed against a hosted provider with non-confidential or sample
+material while the governance question is settled in parallel. **This decision therefore no longer
+blocks STEP 3 or STEP 4.** It must be settled before the production corpus is ingested, and the
+deployment checklist will carry it as an explicit gate.
+
+#### Switching to local embeddings later
+
+1. Stand up `bge-m3` (CPU viable at ingest volumes; GPU for large backfills).
+2. Set `EMBEDDING_PROVIDER=local` and register the model (§3.6 step 1).
+3. Run the backfill job, then the retrieval eval suite — quality change is measured, not assumed.
+4. Flip `is_active`. No re-ingestion, no re-parsing, no citation invalidation.
 
 ### 8.2 Mechanics
 
 Batch (64–128 chunks per call), retry with backoff, persist incrementally so a failure resumes
-rather than restarts. Queries and documents use the model's respective prefixes where the model
-defines them. Embedding dimension is asserted against the column at startup.
+rather than restarts. Queries and documents use the model's respective instruction prefixes where
+it defines them. The provider's declared `dimensions` is asserted against the registered model's
+table at startup; a mismatch is a startup failure, not a runtime surprise.
 
 ---
 
@@ -613,7 +794,7 @@ single-letter codes. This is not a hypothetical edge case — it is the brief's 
 
 **Design consequence: three retrieval legs, not two.**
 
-1. **Semantic** — pgvector cosine over `chunks.embedding`.
+1. **Semantic** — pgvector cosine over the active model's `chunk_emb_*` table (§3.6).
 2. **Lexical** — Postgres FTS using the **`simple`** configuration (no stemming, no stopword
    removal) over a normalised copy of the text, preserving `NOT`, codes and acronyms exactly.
    Phrase queries use `phraseto_tsquery('simple', ...)`.
@@ -950,13 +1131,14 @@ volume grows, the first lever is prompt caching and evidence-set size, not a mod
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Exact technical strings unsearchable (stopwords, stemming) | Flagship queries fail | `simple` FTS config + trigram leg; verified in STEP 3 (§9.1) |
-| Embedding provider vs. confidentiality | Corpus leaves the network irreversibly | Decide **before** STEP 4; self-hosted default (§8.1) |
+| Corpus disclosed to external providers | Disclosure cannot be undone by re-embedding | Provider is config, not code; gate before ingesting the *production* corpus (§8.1) |
 | Poor PDF structure (no outline, inconsistent headings) | Weak sections → weak chunks → weak citations | Font-clustering fallback; needs real documents early |
 | HNSW recall loss under release/ACL filters | Silently wrong or empty results | `iterative_scan`, `ef_search` floor, recall test (§3.4) |
 | OCR corrupts exact strings | Wrong or missed answers on scanned docs | Per-page OCR, confidence propagation, trigram rescue, UI marker (§5) |
 | Golden dataset never materialises | No way to detect regression; §33/§34 unmet | Tier-1 eval in CI from day one; request 30–50 real questions now |
 | Wrong-release answers | Directly violates §9/§49-N | Pre-filter by release, explicit conflict detection, release accuracy as a CI metric |
-| PyMuPDF AGPL licensing | Legal exposure | Confirm before STEP 4; `pypdfium2` fallback (§4) |
+| Weaker structure extraction from permissive libraries | Poor sections → poor citations | Measured on the real corpus at STEP 3; Docling is the escalation path (§4.1, §21) |
+| Ordering across changed release numbering schemes | Wrong "current release" | `sort_override`, curator-confirmed (§3.1.1) |
 | Scope breadth (51 sections) before core RAG is reliable | Everything half-built | Phase discipline per §37–39; the brief already says this and it is correct |
 
 ---
@@ -981,9 +1163,10 @@ Consolidated, as §46 requires. Each is argued at the referenced section.
    explicitly lower-trust for exact-phrase matching. (§5)
 7. **§5/§6 — images need a generated description at ingest**, or "show the relevant screenshot"
    degrades into "show a screenshot from roughly the right page". (§7.2)
-8. **§21 — "Claude as the primary LLM" leaves embeddings unspecified**, and embedding a confidential
-   corpus through a third-party API is a governance decision, not an implementation detail. It needs
-   an explicit answer before ingestion. (§8.1)
+8. **§21 — "Claude as the primary LLM" leaves embeddings unspecified.** Anthropic has no embeddings
+   API, so a second provider is mandatory, and sending a confidential corpus to it is a governance
+   decision rather than an implementation detail. Resolved: hosted initially, local implemented
+   against the same port, gated before the production corpus. (§8.1)
 9. **§17 — object storage is not needed in the MVP.** Local content-addressed storage behind
    `StorageProvider` is sufficient; standing up MinIO now contradicts §40. (§3.5)
 10. **§18 — a broker-based queue (Celery/Redis) is not justified** at this volume. A Postgres
@@ -1008,11 +1191,94 @@ insistence that a running application is not evidence of a working system.
 
 ---
 
-## 21. Implementation roadmap
+## 21. Open architectural decisions
+
+Every decision that is not yet final, what would settle it, and when it must be settled. The test
+applied to each is not "does it work?" but "**is it the best option, and what does it cost us in
+one to two years?**"
+
+| # | Decision | Current position | Binds at | Reversal cost later |
+|---|---|---|---|---|
+| D1 | **Initial embedding provider** | `voyage-3` (hosted) | First ingestion of the *production* corpus | **Low technically** (§3.6 online migration); **nil — impossible — for disclosure already made** |
+| D2 | **Local embedding option** | `bge-m3`, same port, same 1024 dims | Whenever policy requires it | Low — config flip plus backfill |
+| D3 | **PDF processing library** | `pypdfium2` + `pdfplumber` (permissive) | STEP 3 | Low — `DocumentProcessor` port; re-ingestion required, no schema change |
+| D4 | **PyMuPDF as an optional adapter** | Not a default dependency; available for AGPL-accepting or commercially licensed deployments | Only if extraction quality proves insufficient | Low |
+| D5 | **Structure extraction escalation** | Docling (MIT) if heading/section detection is weak on the real corpus | STEP 3, decided by measurement | Medium — heavier deployment |
+| D6 | **Storage** | Local content-addressed filesystem | When multi-node or durability requirements appear | Low — `StorageProvider` port; S3 adapter ≈80 lines + a copy job |
+| D7 | **LLM provider** | Claude Opus 5 | STEP 6 | Low in code; answer quality must be re-evaluated against the golden dataset |
+| D8 | **Reranker** | Local `bge-reranker-v2-m3` | STEP 4 | Low — `Reranker` port; LLM reranker comparable via the eval suite |
+| D9 | **Release ordering scheme** | `integer[]` + curator-confirmed `sort_override` | First release registered | Low — data fix, not a deploy |
+| D10 | **Authority model weights** | Draft defaults in §11 | Needs your corpus and business input | Low — configuration |
+| D11 | **Job queue** | Postgres `SKIP LOCKED` | STEP 1 | Medium — a broker migration is real work, but only if volume justifies it |
+| D12 | **Chunk contextualisation** | Deferred to phase 2, gated on eval | After the golden dataset exists | Low — re-chunk and re-embed |
+| D13 | **Auth mechanism** | OIDC/SSO preferred, local fallback | STEP 11 | Medium — depends on your identity infrastructure |
+
+**Two-year view on the ones that matter.** D1 is the only decision on this list whose cost is
+asymmetric in time: every other row is a port swap or a configuration change, whereas disclosed
+text stays disclosed. D3 and D6 were both chosen to keep optionality cheap rather than to be
+optimal today — the permissive licence and the local filesystem each avoid a commitment we would
+have to unwind under pressure. D11 is the one I would most expect to revisit, and the revisit is
+bounded: the queue is small, isolated and behind the service layer.
+
+**Nothing on this list blocks STEP 1**, which is deliberate — the skeleton is the part that is
+identical under every option above.
+
+---
+
+## 22. Project structure [§41]
+
+```
+.
+├── backend/
+│   ├── app/
+│   │   ├── api/v1/            # routers; HTTP only, no business logic
+│   │   ├── services/          # use cases; owns transaction boundaries
+│   │   │   ├── ingest/        # pipeline stages (§4)
+│   │   │   ├── retrieval/     # hybrid search, fusion, rerank (§9)
+│   │   │   ├── answering/     # grounding, validation, refusal (§12)
+│   │   │   └── export/        # pdf, email renderers (§13)
+│   │   ├── domain/            # entities, authority policy, version resolution
+│   │   ├── adapters/
+│   │   │   ├── llm/           # claude.py
+│   │   │   ├── embeddings/    # voyage.py, local.py
+│   │   │   ├── docproc/       # pdfium.py, plumber_tables.py, (pymupdf.py optional)
+│   │   │   ├── ocr/           # tesseract.py
+│   │   │   ├── rerank/        # cross_encoder.py
+│   │   │   └── storage/       # local_fs.py, (s3.py later)
+│   │   ├── db/                # SQLAlchemy models, repositories
+│   │   ├── config.py          # pydantic-settings; every D-decision surfaces here
+│   │   └── main.py
+│   ├── worker/                # queue consumer process
+│   ├── migrations/            # alembic
+│   └── tests/
+│       ├── unit/
+│       ├── integration/       # testcontainers postgres
+│       └── fixtures/          # sample PDFs
+├── evaluation/
+│   ├── datasets/              # golden dataset (§17.1)
+│   ├── harness/               # tier 1/2/3 runners
+│   └── reports/
+├── frontend/
+│   └── src/{features,components,api,routes}/
+├── docs/
+│   ├── ARCHITECTURE.md        # this document
+│   ├── API.md                 # generated + prose
+│   └── decisions/             # ADRs for anything that changes §21
+├── docker-compose.yml
+└── Makefile
+```
+
+Two conventions worth fixing now: `api/` may not import from `adapters/` (it goes through
+`services/`), and `domain/` imports nothing from the outer layers. These are enforced by a lint
+rule in CI rather than by good intentions.
+
+---
+
+## 23. Implementation roadmap
 
 | Step | Deliverable | Exit criterion |
 |---|---|---|
-| **0** | *This document, reviewed* + two decisions (embedding provider; PyMuPDF licence) | Sign-off |
+| **0** | *This document, reviewed* — D1/D3 resolved (§21) | Sign-off ✅ |
 | **1** | Skeleton: FastAPI, Alembic, Docker Compose, CI, ports | `docker compose up` green, migrations apply |
 | **2** | Schema + FTS/trigram verification on real Postgres | `PNL NOT PROCESSED` provably retrievable (§9.1) |
 | **3** | Ingestion: extract → structure → chunk → embed → index | 3 real PDFs (text, screenshots, scanned) ingest to READY |
@@ -1029,16 +1295,59 @@ Steps 1–5 constitute the §37 MVP. Steps 6–9 map to §38, and the remainder 
 
 ---
 
-## 22. What I need from you before STEP 3
+## 24. STEP 1 — exact plan
 
-1. **Embedding provider decision** (§8.1) — may the documentation be sent to a third-party embedding
-   API, or must embeddings be self-hosted? This is irreversible in practice once a corpus is indexed.
-2. **Representative documents** (§48) — ideally: one text PDF, one screenshot-heavy, one with tables,
-   one scanned, and the *same manual in two releases*. The last one is the most valuable, because it
-   exercises §9, §15 and §45 simultaneously.
-3. **30–50 real questions with known answers** (§33), to seed the golden dataset.
-4. **Confirmation of the authority model** (§11) — particularly the relative standing of operational
-   procedures versus manuals in your organisation.
-5. **PyMuPDF licence position** (§4).
+Scope: **project skeleton only.** No ingestion, no retrieval, no LLM call, no UI beyond a
+placeholder. The purpose is a repository where every subsequent step has somewhere to land and a
+test harness that can prove it landed.
 
-Items 1 and 5 block STEP 3. Items 2–4 block meaningful validation of STEPs 4–6.
+**Deliverables**
+
+1. `docker-compose.yml` — `postgres` (16 + pgvector + pg_trgm), `api`, `worker`. No Redis.
+2. Backend package per §22, with `pyproject.toml` (uv), Python 3.12.
+3. `config.py` using pydantic-settings, with every §21 decision expressed as a setting
+   (`EMBEDDING_PROVIDER`, `PDF_PROCESSOR`, `STORAGE_BACKEND`, `LLM_PROVIDER`, `RERANKER`).
+   No provider is constructed at import time; all resolve through a factory.
+4. **The ports from §2.3 defined, with exactly one stub implementation each** that raises
+   `NotImplementedError`. This fixes the interfaces before anything depends on them.
+5. Alembic initialised; one migration creating the extensions only. **Not the full schema** —
+   that is STEP 2, after the FTS behaviour is verified against a real Postgres.
+6. `GET /health` returning database and extension status, and `GET /api/v1/releases` returning
+   an empty list — one trivially real path end-to-end.
+7. Frontend scaffold: Vite + React + TS, one page calling `/health`. Nothing more.
+8. Test harness: pytest, `testcontainers` for Postgres, one integration test asserting the
+   extensions load and a migration applies to an empty database.
+9. CI (GitHub Actions): lint (ruff), format check, type check (mypy), tests, and the
+   import-boundary rule from §22.
+10. `Makefile`: `up`, `test`, `lint`, `migrate`, `fmt`.
+
+**Exit criteria**
+
+- `docker compose up` gives a healthy API against a real Postgres with both extensions present.
+- `make test` passes from clean checkout on CI.
+- Switching `EMBEDDING_PROVIDER` between `voyage` and `local` changes which stub is constructed —
+  proving the port wiring works before either is implemented.
+
+**Explicitly not in STEP 1:** the database schema, PDF parsing, any external API call, any
+dependency not required by the above. Dependencies are added at the step that first needs them.
+
+**Estimated size:** ~600–900 lines, mostly configuration and scaffolding. This is deliberately
+small: it is the step that is cheapest to get wrong and most expensive to have gotten wrong.
+
+---
+
+## 25. What I still need from you
+
+**Nothing blocks STEP 1 or STEP 2.** These are needed for STEP 3 onwards to be meaningful rather
+than merely green:
+
+1. **Representative documents** (§48) — one text PDF, one screenshot-heavy, one with tables, one
+   scanned, and the **same manual in two releases**. The last is the most valuable single input in
+   this list: it exercises §9, §15 and §45 simultaneously, and nothing else can substitute for it.
+2. **30–50 real questions with known answers** (§33), to seed the golden dataset. Needed before
+   STEP 4's exit criterion means anything.
+3. **Confirmation of the authority model** (§11, D10) — in particular whether operational
+   procedures outrank manuals in your organisation. A business fact I cannot infer.
+4. **Production-corpus embedding gate** (D1) — before real confidential documents are ingested,
+   not before code is written. Flagged in the deployment checklist.
+5. **Identity infrastructure** (D13) — whether an OIDC provider is available, needed at STEP 11.
