@@ -3,7 +3,9 @@
 Status: **revision 2 — incorporates the first architecture review.** No implementation has started
 (per §47 STEP 1–2 of the brief). Awaiting second review before the STEP 1 skeleton.
 
-Changes in this revision: release ordering made scheme-tolerant (§3.1.1); embeddings moved to
+Changes in this revision: the `english` full-text inversion is now **empirically verified on
+PostgreSQL 16.13** and is worse than first described (§9.1); a data classification policy governs
+which provider may ever see a document (§8.1.1); release ordering made scheme-tolerant (§3.1.1); embeddings moved to
 per-model tables with an online re-embedding path (§3.6); PDF library re-evaluated on licence and
 capability, reversing the initial choice (§4.1); embedding provider decision recorded with its
 disclosure surface (§8.1); open decisions consolidated (§21); project structure and an exact
@@ -764,6 +766,62 @@ material while the governance question is settled in parallel. **This decision t
 blocks STEP 3 or STEP 4.** It must be settled before the production corpus is ingested, and the
 deployment checklist will carry it as an explicit gate.
 
+### 8.1.1 Data classification policy [architecture review requirement]
+
+The review's point is correct and it is the right shape: a document must never reach a cloud
+provider merely because that provider happens to be configured. The guard belongs in the
+architecture, not in operator attention.
+
+Every document carries a classification; every provider declares a locality. A matrix decides, and
+**the default answer is no**.
+
+```sql
+CREATE TYPE data_classification AS ENUM
+    ('public','internal','confidential','highly_confidential');
+
+ALTER TABLE documents
+    ADD COLUMN classification data_classification NOT NULL DEFAULT 'confidential';
+```
+
+Defaulting to `confidential` is deliberate: an unclassified document is treated as sensitive until
+someone says otherwise. The failure mode of a forgotten classification should be a refusal to
+process, not a silent upload.
+
+```yaml
+embedding_policy:
+  mode: mixed              # strict_local | mixed | permissive
+  matrix:
+    public:               [cloud, local]
+    internal:             [cloud, local]     # configurable per deployment
+    confidential:         [local]
+    highly_confidential:  [local]
+```
+
+`mode: strict_local` collapses the whole matrix to local regardless of its contents — the
+single-switch posture the review asked for, for an installation that must guarantee no egress.
+
+**Enforcement points** (a policy checked in one place is a policy that will be bypassed in another):
+
+1. **Upload** — a document whose classification no available provider can serve is rejected at
+   upload with an explanatory error, not accepted and failed later.
+2. **Ingestion, per batch** — `EmbeddingRouter` resolves the provider *from the document's
+   classification*, never from a global default. There is no code path where a chunk reaches a
+   provider without passing this resolution.
+3. **Startup** — if the policy permits a provider that is not configured, the application refuses
+   to start rather than degrading to whatever is available.
+4. **Audit** — every embedding batch logs `(document_id, classification, provider, chunk_count)`.
+   Whether confidential material has ever left the network becomes an answerable question with
+   evidence, which is what §30's audit requirement is actually for.
+
+The same matrix governs `LLMProvider`, because answering sends retrieved passages to Anthropic. A
+`strict_local` deployment therefore also requires a local answering model — the policy makes that
+dependency explicit instead of letting a confidential corpus leak at answer time after being
+carefully embedded locally. **This is a consequence worth stating plainly: local embeddings alone
+do not give you a private system.**
+
+MVP scope: the enum, the matrix, the router and the four enforcement points. Per-document
+classification UI and bulk reclassification are phase 2.
+
 #### Switching to local embeddings later
 
 1. Stand up `bge-m3` (CPU viable at ingest volumes; GPU for large backfills).
@@ -786,11 +844,58 @@ table at startup; a mismatch is a startup failure, not a runtime surprise.
 
 The brief's own example, **`PNL NOT PROCESSED`**, breaks under the obvious implementation.
 
-`to_tsvector('english', 'PNL NOT PROCESSED')` yields roughly `'pnl':1 'process':3`. The English
-configuration **discards `NOT` as a stopword** and stems `PROCESSED` → `process`. A phrase search for
-`NOT PROCESSED` therefore cannot distinguish it from `PROCESSED`, and a status value whose entire
-meaning is the negation becomes unsearchable. The same applies to `IS NOT`, `NO`, `OFF`, and
-single-letter codes. This is not a hypothetical edge case — it is the brief's flagship example.
+**Verified on PostgreSQL 16.13, not asserted from memory.** The result is worse than I described in
+revision 1:
+
+```
+=# SELECT to_tsvector('english','PNL NOT PROCESSED');
+ 'pnl':1 'process':3          -- NOT discarded as a stopword, PROCESSED stemmed
+
+=# SELECT to_tsvector('simple','PNL NOT PROCESSED');
+ 'not':2 'pnl':1 'processed':3
+
+-- Does a search for "NOT PROCESSED" correctly separate the two states?
+                                      english   simple
+ "PNL status is NOT PROCESSED" matches    t        t     ← wanted
+ "PNL status is PROCESSED"     matches    t        f     ← english is WRONG
+```
+
+Under the `english` configuration, a page stating that PNL **is** processed is returned as a match
+for `NOT PROCESSED`. This is not a recall problem, which was my original framing — it is a
+**semantic inversion**: the system retrieves evidence asserting the opposite of what was asked, and
+then answers from it, with a correct-looking citation to a real page.
+
+For an operational documentation system this is the most dangerous failure mode available. It is
+not detectable by the LLM (the evidence is genuine, it simply says the opposite), not detectable by
+citation validation (the page and quote are real), and not detectable by a demo (it looks like a
+confident, sourced answer). Only the retrieval layer can prevent it.
+
+Two further findings from the same session:
+
+```
+-- pg_trgm rescues OCR damage that exact phrase matching loses entirely
+ 'PNL NOT PROCESSEO'   similarity 0.79   exact-phrase match: f
+ 'PN1 NOT PROCESSED'   similarity 0.79   exact-phrase match: f
+ 'PNL N0T PROCESSED'   similarity 0.70   exact-phrase match: f
+
+-- hyphenated codes fragment into multiple tokens
+=# SELECT to_tsvector('simple','error E-1052');
+ 'e':2 '-1052':3 'error':1      -- E-1052 is not one token
+```
+
+The first justifies leg 3 quantitatively rather than by intuition.
+
+The second needs a correction to what I wrote before testing it. I claimed fragmentation broke
+exact code matching and that only trigrams could rescue it. **That was wrong**, and the test
+disproved it: `phraseto_tsquery` fragments the *query* identically and preserves adjacency
+(`'e' <-> '-1052'`), so `E-1052` matches correctly and does **not** match `E-1053`.
+
+The real finding is narrower but still operationally important: correctness here depends on using
+`phraseto_tsquery`, which preserves token adjacency, and **not** `plainto_tsquery`, which reduces
+to an AND of fragments and can match a page where `e` and `-1052` appear far apart in unrelated
+codes. So the rule for leg 2 is: **technical identifiers are always phrase queries, never bag-of-
+words queries.** That is now enforced in the retrieval code rather than left to whoever writes the
+next query builder.
 
 **Design consequence: three retrieval legs, not two.**
 
@@ -806,8 +911,12 @@ escalates leg 2 to a strict phrase requirement and boosts its weight. An unstemm
 costs some recall on ordinary prose, which legs 1 and 3 recover; the reverse trade — losing exact
 technical strings — is not recoverable.
 
-*This behaviour must be verified empirically on the actual Postgres instance during STEP 3 before
-the schema is frozen.*
+**Regression test, not just a design note.** Because this failure is invisible at every later layer,
+the `english`-vs-`simple` inversion above becomes a permanent test in the suite from STEP 2: a
+fixture containing both `PNL NOT PROCESSED` and `PNL PROCESSED`, asserting that a search for the
+negative state does **not** return the positive one. If someone later "optimises" the index to
+`english` for better prose recall, CI fails with an explanation rather than the system quietly
+starting to invert operational states.
 
 ### 9.2 Fusion
 
@@ -1130,7 +1239,9 @@ volume grows, the first lever is prompt caching and evidence-set size, not a mod
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Exact technical strings unsearchable (stopwords, stemming) | Flagship queries fail | `simple` FTS config + trigram leg; verified in STEP 3 (§9.1) |
+| **`english` FTS inverts operational states** | Retrieves evidence asserting the *opposite*; undetectable downstream | `simple` config + trigram leg; **verified on PG 16.13** and locked by a CI regression test (§9.1) |
+| Hyphenated codes (`E-1052`) fragment even under `simple` | Exact-code search misses | Trigram leg covers it; verified (§9.1) |
+| Confidential document reaches a cloud provider by default | Irreversible disclosure | Classification policy, default-deny, four enforcement points (§8.1.1) |
 | Corpus disclosed to external providers | Disclosure cannot be undone by re-embedding | Provider is config, not code; gate before ingesting the *production* corpus (§8.1) |
 | Poor PDF structure (no outline, inconsistent headings) | Weak sections → weak chunks → weak citations | Font-clustering fallback; needs real documents early |
 | HNSW recall loss under release/ACL filters | Silently wrong or empty results | `iterative_scan`, `ef_search` floor, recall test (§3.4) |
@@ -1201,6 +1312,7 @@ one to two years?**"
 |---|---|---|---|---|
 | D1 | **Initial embedding provider** | `voyage-3` (hosted) | First ingestion of the *production* corpus | **Low technically** (§3.6 online migration); **nil — impossible — for disclosure already made** |
 | D2 | **Local embedding option** | `bge-m3`, same port, same 1024 dims | Whenever policy requires it | Low — config flip plus backfill |
+| D2b | **Local answering model** | None — `strict_local` deployments need one (§8.1.1) | Only if a no-egress posture is required | Medium — quality must be re-evaluated |
 | D3 | **PDF processing library** | `pypdfium2` + `pdfplumber` (permissive) | STEP 3 | Low — `DocumentProcessor` port; re-ingestion required, no schema change |
 | D4 | **PyMuPDF as an optional adapter** | Not a default dependency; available for AGPL-accepting or commercially licensed deployments | Only if extraction quality proves insufficient | Low |
 | D5 | **Structure extraction escalation** | Docling (MIT) if heading/section detection is weak on the real corpus | STEP 3, decided by measurement | Medium — heavier deployment |
@@ -1310,6 +1422,9 @@ test harness that can prove it landed.
    No provider is constructed at import time; all resolve through a factory.
 4. **The ports from §2.3 defined, with exactly one stub implementation each** that raises
    `NotImplementedError`. This fixes the interfaces before anything depends on them.
+4b. **`EmbeddingRouter` and the classification policy matrix (§8.1.1)**, with startup validation
+   and unit tests — including a test asserting that a `confidential` document cannot be routed to
+   a cloud provider under any configuration. The guard exists before the thing it guards.
 5. Alembic initialised; one migration creating the extensions only. **Not the full schema** —
    that is STEP 2, after the FTS behaviour is verified against a real Postgres.
 6. `GET /health` returning database and extension status, and `GET /api/v1/releases` returning
@@ -1327,6 +1442,7 @@ test harness that can prove it landed.
 - `make test` passes from clean checkout on CI.
 - Switching `EMBEDDING_PROVIDER` between `voyage` and `local` changes which stub is constructed —
   proving the port wiring works before either is implemented.
+- `EMBEDDING_POLICY_MODE=strict_local` with only a cloud provider configured **fails startup**.
 
 **Explicitly not in STEP 1:** the database schema, PDF parsing, any external API call, any
 dependency not required by the above. Dependencies are added at the step that first needs them.
