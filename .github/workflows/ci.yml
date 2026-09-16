@@ -30,6 +30,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
+      - name: No real documentation committed
+        working-directory: .
+        run: |
+          # The repository is public. Real manuals must never land here.
+          found=$(git ls-files '*.pdf' | grep -v '^backend/tests/fixtures/synthetic/' || true)
+          if [ -n "$found" ]; then
+            echo "PDFs committed outside the synthetic fixtures directory:"; echo "$found"
+            echo "The corpus is confidential and this repository is public."; exit 1
+          fi
+          echo "no documentation files committed"
       - name: No unreviewed egress bypass
         run: |
           # Every unwrap_unchecked is a deliberate review decision (§8.1.1).

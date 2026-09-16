@@ -8,3 +8,12 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# ─── Documentação real nunca entra no repositório (é público) ───────────────
+# Ver docs/audit/README.md. Um PDF commitado por engano é uma divulgação maior
+# e mais permanente do que qualquer coisa que a política de egress previne.
+*.pdf
+!backend/tests/fixtures/synthetic/*.pdf
+corpus/
+documents/
+var/storage/
