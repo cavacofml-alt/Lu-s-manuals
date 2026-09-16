@@ -40,7 +40,7 @@ Everything else — OCR, images, export, the viewer — is engineering work with
 
 **Recommended stack:** Python 3.12 / FastAPI / SQLAlchemy 2.x / PostgreSQL 16 + pgvector /
 pypdfium2 + pdfplumber (permissively licensed — see §4.1) / Tesseract (OCR fallback) /
-Claude Sonnet 5 for answering / React + Vite + pdf.js.
+self-hosted `bge-m3` embeddings / Claude Sonnet 5 for answering / React + Vite + pdf.js.
 No Redis, no Celery, no separate vector DB, no object store in the MVP. Rationale throughout.
 
 Decisions still open, and what binds them, are consolidated in **§21 Open Architectural
@@ -724,15 +724,22 @@ the full text of that corpus to the third party.*
 | Multilingual | Good | Excellent |
 | Dimensions | 1024 | 1024 |
 
-**Decision (per architecture review): hosted `voyage-3` as the initial implementation, with
-`LocalEmbeddingProvider` (`bge-m3`) implemented against the same port and a documented,
-tested migration path (§3.6).** Both are 1024-dimensional, so a switch does not even change the
-column type.
+**Decision (product owner, after the deployment discussion): self-hosted `bge-m3` is the shipped
+default.** `voyage-3` remains implemented against the same port and selectable by configuration;
+both are 1024-dimensional, so switching does not change the column type.
 
-**Why `voyage-3` for the initial provider:** strongest retrieval quality per unit of effort on
-technical English documentation, no infrastructure, and a 1024-dimension output matching the
-self-hosted alternative. Chosen over OpenAI `text-embedding-3-large` mainly for that dimensional
-symmetry (3072 dims would make the local fallback a schema change, not a config change).
+The reasoning is about *when* disclosure happens rather than whether a hosted model is better.
+Cloud embeddings send the text of **every chunk of every document** to a third party, once, at
+ingest — the entire corpus. Local embeddings send nothing at all during ingest. Since the answering
+model is still Claude, passages do leave at query time, but only the ~12 retrieved for a specific
+question, roughly 0.04% of a 10,000-page corpus per question. The shipped configuration therefore
+eliminates bulk disclosure while keeping cloud quality where it is hardest to replace.
+
+Two honest consequences. First, exposure through answering is **incremental and proportional to
+use** rather than zero: a thousand questions send a thousand sets of passages, and those passages
+are by definition the most-consulted material. Second, `bge-m3` on CPU is viable for tens of
+manuals (an overnight backfill) but not for hundreds; that is the point at which either a GPU or
+`voyage-3` becomes necessary, and the §3.6 migration exists for exactly that.
 
 #### What is sent, and when
 
@@ -1474,7 +1481,7 @@ Opus 5 as a comparison once the dataset exists.
 | 50 answers/day | ≈ $38/month | ≈ $95/month |
 | 200 answers/day | ≈ $150/month | ≈ $380/month |
 | Ingest image description (Haiku 4.5) | ≈ $0.001 per image | — |
-| Embeddings (self-hosted) | infrastructure only | — |
+| Embeddings (`bge-m3`, self-hosted) | CPU time only, no API spend | — |
 | 500 documents × 200 pages, one-off ingest | dominated by OCR CPU time, not API spend | — |
 
 Prompt caching (§12.4) reduces the input side further, since the system prompt and answer schema
@@ -1566,7 +1573,7 @@ one to two years?**"
 
 | # | Decision | Current position | Binds at | Reversal cost later |
 |---|---|---|---|---|
-| D1 | **Initial embedding provider** | `voyage-3` (hosted) | First ingestion of the *production* corpus | **Low technically** (§3.6 online migration); **nil — impossible — for disclosure already made** |
+| D1 | **Embedding provider** | **`bge-m3`, self-hosted** — no bulk corpus disclosure at ingest | Decided; revisit at hundreds of documents (CPU limit) | Low technically (§3.6 online migration); nil for disclosure already made |
 | D2 | **Local embedding option** | `bge-m3`, same port, same 1024 dims | Whenever policy requires it | Low — config flip plus backfill |
 | D2b | **Local answering model** | None — `strict_local` deployments need one (§8.1.1) | Only if a no-egress posture is required | Medium — quality must be re-evaluated |
 | D3 | **PDF processing library** | `pypdfium2` + `pdfplumber` (permissive) | STEP 3 | Low — `DocumentProcessor` port; re-ingestion required, no schema change |

@@ -38,14 +38,17 @@ class Settings(BaseSettings):
     handles_classification: Classification = Classification.INTERNAL
 
     # ── providers, one per capability (§21 D1/D2/D7/D8) ───────────────────────
-    embedding_provider: str = "voyage"  # voyage | local_embeddings | none
+    embedding_provider: str = "local_embeddings"  # local_embeddings | voyage | none
     llm_provider: str = "claude"  # claude | local_llm | none
     rerank_provider: str = "local_reranker"  # local_reranker | cloud_reranker | none
+    # Vision describes screenshots at ingest (§7.2). Cloud vision is blocked for
+    # confidential documents by the matrix, so on a deployment that later raises
+    # handles_classification this falls back to caption + surrounding text.
     vision_provider: str = "claude_vision"  # claude_vision | local_vision | none
     ocr_provider: str = "tesseract"  # tesseract | cloud_ocr | none
 
     llm_model_id: str = "claude-sonnet-5"
-    embedding_model_id: str = "voyage-3"
+    embedding_model_id: str = "bge-m3"
     embedding_dimensions: int = 1024
 
     # ── §21 D3/D6 ─────────────────────────────────────────────────────────────
