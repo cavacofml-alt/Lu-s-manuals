@@ -100,3 +100,45 @@ def test_no_provider_exposes_a_public_method_taking_raw_content() -> None:
         + "\n\nContent must enter through submit(Released), which the guard alone can "
         "produce. A second public method is a second way in."
     )
+
+
+def test_no_orphaned_modules() -> None:
+    """A module nothing imports is how `ports.py` happened.
+
+    It was dead code that looked authoritative: a file named "Provider interfaces"
+    declaring `StorageProvider.put(key, BinaryIO)` with no locality and no guard, which
+    a developer implementing storage would have found and implemented against. Nothing
+    referenced it, so nothing failed when it drifted out of line with the real mechanism.
+
+    An orphan is not always wrong — but it should be noticed, not accumulate quietly.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    modules = {
+        ".".join(p.relative_to(root).with_suffix("").parts): p
+        for p in (root / "app").rglob("*.py")
+        if p.name != "__init__.py"
+    }
+
+    imported: set[str] = set()
+    for source_dir in ("app", "worker", "tests"):
+        for path in (root / source_dir).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    imported.add(node.module)
+                elif isinstance(node, ast.Import):
+                    imported.update(alias.name for alias in node.names)
+
+    orphans = [
+        str(path.relative_to(root))
+        for name, path in sorted(modules.items())
+        if name not in imported and not any(i.startswith(name + ".") for i in imported)
+    ]
+    assert not orphans, (
+        "Modules nothing imports:\n  "
+        + "\n  ".join(orphans)
+        + "\n\nDelete them, or wire them in. Dead code that looks like an interface is "
+        "what a future developer will implement against."
+    )

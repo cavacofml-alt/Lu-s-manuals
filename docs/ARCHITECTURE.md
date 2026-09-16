@@ -977,6 +977,49 @@ runtime** from being reached without a clearance, and **prevented in CI** from e
 policy; telemetry is **convention only**. Neither is a sandbox, and §8.1.2's limits still apply to
 both.
 
+### 8.1.5 The boundary, in four honest categories
+
+The fourth review asked whether the inventory test made the rule structurally
+unavoidable, or merely recognised the files it already knew about. It was the latter, and the
+review's instinct was right: **`app/adapters/` was becoming the new `ports.py`** — a boundary that
+holds only while every future developer remembers where things go. Each of these passed CI
+untouched:
+
+```
+app/services/fake_cloud.py                CloudTranslator.translate(text) → httpx.post
+app/document_processing/cloud_parser.py   parse_pdf(pdf_bytes)            → httpx.post
+app/services/exfil.py                     send_to_external_service(...)   → httpx.post
+```
+
+Naming and inheritance cannot catch these, because the author of such a module is exactly the
+person who never heard of `Provider`. What the three share is not a convention but a *capability*:
+sending content anywhere requires a network client. So the rule became structural —
+
+> Only the adapter layer may import a network client, and only inside a module defining a
+> `Provider`.
+
+Checked by reading imports, so it applies equally to a class, a function, a coroutine or a
+module-level statement. All three examples now fail CI. A companion test fails on any module in
+`app/` that nothing imports, which is what would have caught `ports.py` on the day it was written.
+
+**The four categories, stated so nobody has to infer them:**
+
+| Layer | Strength | What it actually does |
+|---|---|---|
+| `Provider` + `EgressGuard` + `Released` | **Runtime prevention** | Content cannot reach a provider's public API without a policy decision for that specific provider |
+| Adapter inventory + network-import boundary | **CI prevention** | A second family of adapters, or a network client anywhere else, fails the build |
+| Private `_process`, `unwrap_unchecked`, orphan check | **Convention** | Backed by greps and review; a deliberate act, not an accident |
+| Arbitrary in-process code, logging, telemetry | **Not controlled** | Python is not a sandbox; `logger.info(chunk_text)` cannot be prevented from inside the process |
+
+Known gaps in the CI layer, listed rather than left to be discovered: a shell-out to `curl`, a
+dynamic `importlib` call, a raw socket reached through a transitive dependency, or a network client
+smuggled in via a library we already import. Each is a deliberate act. None is prevented here.
+
+**The only categorical guarantee remains infrastructural**, as in §8.1.2: a deployment holding
+confidential documentation with no cloud credentials and no outbound route fails at the socket, not
+at a policy check. Everything above makes the accidental case impossible and the deliberate case
+conspicuous. It does not replace not having the keys.
+
 #### Property 6 — the ingestion boundary
 
 The review's requirement is right and is not yet implemented, because ingestion does not exist yet.

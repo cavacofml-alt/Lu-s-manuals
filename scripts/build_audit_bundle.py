@@ -26,6 +26,7 @@ SOURCES = [
     ("Tests — egress property matrix", "backend/tests/unit/test_egress_policy.py"),
     ("Tests — bypass attempts (Property 3)", "backend/tests/unit/test_egress_bypass.py"),
     ("Tests — adapter inventory (Property 7)", "backend/tests/unit/test_adapter_inventory.py"),
+    ("Tests — network boundary", "backend/tests/unit/test_network_boundary.py"),
     ("Tests — full-text semantics", "backend/tests/integration/test_fulltext_semantics.py"),
 ]
 
