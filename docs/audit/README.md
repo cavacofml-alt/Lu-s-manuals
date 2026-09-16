@@ -46,3 +46,20 @@ sintéticos ou públicos — nunca documentação interna.
 Se o repositório tiver de continuar público, o corpus real vive fora dele.
 Se o corpus tiver de viver aqui, o repositório passa a privado — e então estes links
 deixam de funcionar para auditoria externa, e voltamos a colar ficheiros à mão.
+
+## Correr sem PC local
+
+`.devcontainer/` permite abrir o repositório em **GitHub Codespaces** (plano gratuito:
+60 h/mês) e ter a stack a correr sem instalar nada. É a mesma `docker-compose.yml` que
+correrá no PC local — não existe uma "versão cloud" a divergir da final.
+
+1. No GitHub: **Code → Codespaces → Create codespace**
+2. Esperar pelo `setup.sh` (Postgres, dependências, migrações)
+3. `make test`
+
+**Custos:** nada até ao STEP 5. Schema, ingestão, extração e indexação com embeddings
+locais não usam APIs pagas. A partir das respostas, cada pergunta ao Claude custa
+~€0,06.
+
+**Os manuais reais não entram aqui.** Um Codespace é armazenamento de terceiros, tal
+como o repositório é público. Documentos de teste não confidenciais apenas.
