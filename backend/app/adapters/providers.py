@@ -10,11 +10,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domain.egress import Capability, Classified, Locality
+from app.domain.egress import Capability, EgressViolation, Locality, Released
 
 
 class Provider:
-    """Base. Subclasses are stubs until the step that implements them."""
+    """Base. Subclasses are stubs until the step that implements them.
+
+    The public entry point is `submit`, and it accepts only a `Released` — an object
+    that only `EgressGuard.release` can construct. This is what makes the guard
+    unavoidable at runtime: a direct call with a raw string, a `Classified`, or a
+    hand-built `Released` is refused here, before any provider code runs.
+
+    Subclasses implement `_process`, which is private. Calling `_process` directly still
+    works, as it must in Python — but that is a deliberate act against a named private
+    method, not an ordinary call to a public API. See docs/ARCHITECTURE.md §8.1.2 for
+    what this does and does not guarantee.
+    """
 
     name: str
     locality: Locality
@@ -24,8 +35,22 @@ class Provider:
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.name} {self.locality}/{self.capability}>"
 
-    def _unimplemented(self) -> NotImplementedError:
-        return NotImplementedError(f"{self.name} lands in {self.lands_in_step}")
+    def submit(self, released: Released[Any]) -> Any:
+        """The only public way to hand content to a provider."""
+        if not isinstance(released, Released):
+            raise EgressViolation(
+                f"{self.name} accepts only content cleared by EgressGuard.release(). "
+                f"Got {type(released).__name__}. Route it through the guard."
+            )
+        if released.provider_name != self.name:
+            raise EgressViolation(
+                f"Clearance was issued for {released.provider_name!r}, not {self.name!r}. "
+                "A clearance for one provider cannot be replayed against another."
+            )
+        return self._process(released.value)
+
+    def _process(self, payload: Any) -> Any:
+        raise NotImplementedError(f"{self.name} lands in {self.lands_in_step}")
 
 
 # ── embeddings ────────────────────────────────────────────────────────────────
@@ -35,18 +60,12 @@ class VoyageEmbeddings(Provider):
     capability = Capability.EMBEDDING
     lands_in_step = "STEP 3"
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise self._unimplemented()
-
 
 class LocalEmbeddings(Provider):
     name = "bge-m3"
     locality = Locality.LOCAL
     capability = Capability.EMBEDDING
     lands_in_step = "STEP 3"
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise self._unimplemented()
 
 
 # ── answering ─────────────────────────────────────────────────────────────────
@@ -56,18 +75,12 @@ class ClaudeLLM(Provider):
     capability = Capability.LLM
     lands_in_step = "STEP 5"
 
-    def answer(self, prompt: Classified[Any]) -> Any:
-        raise self._unimplemented()
-
 
 class LocalLLM(Provider):
     name = "local-llm"
     locality = Locality.LOCAL
     capability = Capability.LLM
     lands_in_step = "STEP 5 (only needed for a no-egress deployment)"
-
-    def answer(self, prompt: Classified[Any]) -> Any:
-        raise self._unimplemented()
 
 
 # ── reranking ─────────────────────────────────────────────────────────────────
@@ -76,9 +89,6 @@ class LocalReranker(Provider):
     locality = Locality.LOCAL
     capability = Capability.RERANK
     lands_in_step = "STEP 4"
-
-    def rerank(self, query: str, candidates: list[Classified[str]]) -> list[Any]:
-        raise self._unimplemented()
 
 
 class CloudReranker(Provider):
@@ -90,9 +100,6 @@ class CloudReranker(Provider):
     capability = Capability.RERANK
     lands_in_step = "not planned"
 
-    def rerank(self, query: str, candidates: list[Classified[str]]) -> list[Any]:
-        raise self._unimplemented()
-
 
 # ── vision (screenshot description, §7.2) ─────────────────────────────────────
 class ClaudeVision(Provider):
@@ -101,18 +108,12 @@ class ClaudeVision(Provider):
     capability = Capability.VISION
     lands_in_step = "STEP 7"
 
-    def describe(self, image: Classified[bytes]) -> str:
-        raise self._unimplemented()
-
 
 class LocalVision(Provider):
     name = "local-vlm"
     locality = Locality.LOCAL
     capability = Capability.VISION
     lands_in_step = "STEP 7 (only needed for a no-egress deployment)"
-
-    def describe(self, image: Classified[bytes]) -> str:
-        raise self._unimplemented()
 
 
 # ── OCR ───────────────────────────────────────────────────────────────────────
@@ -122,18 +123,12 @@ class TesseractOcr(Provider):
     capability = Capability.OCR
     lands_in_step = "STEP 3"
 
-    def ocr_page(self, image: Classified[bytes]) -> str:
-        raise self._unimplemented()
-
 
 class CloudOcr(Provider):
     name = "cloud-ocr"
     locality = Locality.CLOUD
     capability = Capability.OCR
     lands_in_step = "not planned"
-
-    def ocr_page(self, image: Classified[bytes]) -> str:
-        raise self._unimplemented()
 
 
 REGISTRY: dict[str, type[Provider]] = {

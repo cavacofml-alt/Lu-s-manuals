@@ -85,13 +85,13 @@ def test_sensitive_content_is_refused_by_every_cloud_provider(
 def test_local_providers_accept_every_classification(provider, classification) -> None:
     g = guard(EgressPolicy(mode=PolicyMode.MIXED), provider)
     payload = Classified("content", classification)
-    assert g.release(payload, provider) == "content"
+    assert g.release(payload, provider).value == "content"
 
 
 @pytest.mark.parametrize("provider", ALL_CLOUD_PROVIDERS, ids=lambda p: p.name)
 def test_public_content_may_use_cloud_providers(provider) -> None:
     g = guard(EgressPolicy(mode=PolicyMode.MIXED), provider)
-    assert g.release(Classified("public", Classification.PUBLIC), provider) == "public"
+    assert g.release(Classified("public", Classification.PUBLIC), provider).value == "public"
 
 
 # ── resolution cannot pick a forbidden provider ───────────────────────────────
@@ -135,6 +135,7 @@ def test_unwrap_unchecked_demands_a_reason() -> None:
     with pytest.raises(ValueError):
         payload.unwrap_unchecked("")
     assert payload.unwrap_unchecked("rendering a PDF locally, no egress") == "secret"
+    # What it does NOT do is get past a provider — see tests/unit/test_egress_bypass.py
 
 
 # ── policy edge cases, all failing closed ─────────────────────────────────────

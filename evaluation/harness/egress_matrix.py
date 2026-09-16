@@ -81,6 +81,39 @@ def main() -> int:
         except RuntimeError:
             print(f"  STARTUP FAILURE  {label}")
 
+    print("\n=== bypass attempts (Property 3) " + "=" * 40)
+    from app.domain.egress import EgressViolation, Released  # noqa: PLC0415
+
+    secret = Classified("HIGHLY CONFIDENTIAL CONTENT", Classification.HIGHLY_CONFIDENTIAL)
+    cloud, local = VoyageEmbeddings(), LocalEmbeddings()
+    local_guard = EgressGuard(EgressPolicy(), {local.capability: [local]})
+
+    attempts = [
+        ("direct call to a cloud adapter, no guard", lambda: cloud.submit(["CONFIDENTIAL"])),
+        ("unwrap_unchecked, then submit to cloud",
+         lambda: cloud.submit(secret.unwrap_unchecked("any reason"))),
+        ("Classified passed straight to an adapter", lambda: ClaudeVision().submit(secret)),
+        ("hand-built clearance",
+         lambda: Released("x", Classification.HIGHLY_CONFIDENTIAL, "voyage-3")),
+        ("local clearance replayed against cloud",
+         lambda: cloud.submit(local_guard.release(secret, local))),
+        ("asking the guard for a cloud clearance",
+         lambda: EgressGuard(EgressPolicy(), {cloud.capability: [cloud]}).release(secret, cloud)),
+    ]
+    for label, attempt in attempts:
+        try:
+            attempt()
+            print(f"  !! NOT BLOCKED   {label}")
+            failures += 1
+        except EgressViolation:
+            print(f"  BLOCKED          {label}")
+
+    try:
+        local.submit(local_guard.release(secret, local))
+        print("  !! stub should have raised on the sanctioned path")
+    except NotImplementedError:
+        print("  REACHES PROVIDER the sanctioned path via a permitted provider")
+
     print(f"\n{'PROPERTY HOLDS' if failures == 0 else f'{failures} VIOLATIONS'}")
     return 1 if failures else 0
 

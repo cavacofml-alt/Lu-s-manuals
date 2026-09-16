@@ -11,15 +11,21 @@ that describes screenshots, OCR, and any future translation or summarisation ste
 Naming it `EmbeddingPolicy` would have guaranteed that the next provider added would not
 be covered by it.
 
-Two mechanisms, because a policy that must be *remembered* is not a control:
+Three mechanisms, at three different strengths. Do not confuse them — the third review
+challenged exactly this, and was right to:
 
 1. `EgressPolicy` decides, per classification, which localities may receive content.
-2. `Classified[T]` makes document content un-passable to a provider without going
-   through that decision. A provider cannot receive a bare `str` of document text; it
-   receives a `Classified[str]` that only `EgressGuard.release` can open.
+2. `Classified[T]` is a **type contract**. It carries the classification with the
+   content and makes an unclassified call site visible to a reader and to mypy. It is
+   not a runtime barrier and cannot stop a direct call to an adapter.
+3. `Released[T]` is the **runtime barrier**. A provider's public API accepts only a
+   `Released`, and it cannot be constructed without a sentinel held privately by
+   `EgressGuard`. That is what makes the guard unavoidable rather than customary.
 
-Bypassing this requires calling `unwrap_unchecked`, which names itself, demands a
-reason, and is greppable in review and in CI.
+What this does not do: prevent someone calling a provider's private `_process`, forging
+an object through `__new__`, or monkeypatching the policy. A closed public API is the
+limit of what is achievable in-process. The real guarantee for a confidential deployment
+is having no cloud credentials and no outbound route — see docs/ARCHITECTURE.md §8.1.2.
 """
 
 from __future__ import annotations
@@ -61,6 +67,12 @@ class Capability(StrEnum):
     OCR = "ocr"
     TRANSLATION = "translation"
     SUMMARISATION = "summarisation"
+
+    # Reserved (§8.1.3). No cloud implementation is planned for either, but reserving
+    # them means such a provider cannot be added without declaring a locality and
+    # falling under the policy.
+    DOCUMENT_PROCESSING = "document_processing"  # cloud parsing / layout / tables
+    STORAGE = "storage"  # an S3 bucket is egress even though no model sees it
 
 
 REQUIRED_CAPABILITIES = frozenset({Capability.EMBEDDING, Capability.LLM})
@@ -121,8 +133,10 @@ class EgressPolicy:
 class Classified(Generic[T]):
     """Document content tagged with its classification.
 
-    Adapters take this rather than a bare value, so the question "may this provider see
-    this?" cannot be skipped by forgetting to ask it.
+    NOTE: this type is a *contract*, not a runtime barrier. It makes the classification
+    travel with the content and makes an unclassified call site visible to a reader and
+    to mypy. It cannot stop anyone calling an adapter directly. `Released` below is what
+    provides the runtime enforcement.
     """
 
     value: T
@@ -135,7 +149,49 @@ class Classified(Generic[T]):
         rendering a PDF locally, returning content to an already-authorised user. It
         requires a reason so the justification sits at the call site, and CI greps for
         it so each use is a review decision rather than a habit.
+
+        It is a convention, not a control. The control is that `Released` cannot be
+        constructed here, so unwrapping does not produce something an adapter accepts.
         """
         if not reason:
             raise ValueError("unwrap_unchecked requires a stated reason")
         return self.value
+
+
+_GUARD_ONLY = object()
+"""Sentinel proving a `Released` was constructed by the guard and not by a caller."""
+
+
+@dataclass(frozen=True)
+class Released(Generic[T]):
+    """Content the policy has cleared for one specific provider.
+
+    This is the runtime barrier. A provider's public API accepts only `Released`, and
+    `Released` cannot be constructed without the sentinel held privately by
+    `EgressGuard`. A developer calling an adapter directly with a raw string, or with a
+    `Classified`, or with a hand-built `Released`, is refused at runtime — not by a type
+    checker, and not by review.
+
+    `provider_name` records which provider the clearance was issued for, so a clearance
+    obtained for a local provider cannot be replayed against a cloud one.
+    """
+
+    value: T
+    classification: Classification
+    provider_name: str
+
+    def __init__(
+        self,
+        value: T,
+        classification: Classification,
+        provider_name: str,
+        _key: object = None,
+    ) -> None:
+        if _key is not _GUARD_ONLY:
+            raise EgressViolation(
+                "Released may only be constructed by EgressGuard.release(). "
+                "Content reaches a provider through the guard or not at all."
+            )
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "classification", classification)
+        object.__setattr__(self, "provider_name", provider_name)

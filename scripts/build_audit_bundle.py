@@ -24,6 +24,7 @@ SOURCES = [
     ("Provider construction", "backend/app/adapters/factory.py"),
     ("Configuration", "backend/app/config.py"),
     ("Tests — egress property matrix", "backend/tests/unit/test_egress_policy.py"),
+    ("Tests — bypass attempts (Property 3)", "backend/tests/unit/test_egress_bypass.py"),
     ("Tests — full-text semantics", "backend/tests/integration/test_fulltext_semantics.py"),
 ]
 

@@ -11,6 +11,7 @@ import logging
 from typing import TypeVar
 
 from app.domain.egress import (
+    _GUARD_ONLY,
     REQUIRED_CAPABILITIES,
     Capability,
     Classification,
@@ -19,6 +20,7 @@ from app.domain.egress import (
     EgressPolicy,
     EgressViolation,
     Locality,
+    Released,
 )
 
 T = TypeVar("T")
@@ -49,12 +51,12 @@ class EgressGuard:
         )
 
     # ── release ───────────────────────────────────────────────────────────────
-    def release(self, payload: Classified[T], provider: ContentSink) -> T:
-        """Open classified content for one specific provider, or refuse.
+    def release(self, payload: Classified[T], provider: ContentSink) -> Released[T]:
+        """Clear content for one specific provider, or refuse.
 
-        This is the only sanctioned way content reaches a provider. Passing a provider
-        the guard did not select is still checked here, so resolving correctly and then
-        sending elsewhere does not slip through.
+        Returns a `Released` — the only object a provider's public API accepts, and one
+        that cannot be constructed anywhere else. That is what makes this the only route
+        to a provider at runtime rather than only by convention.
         """
         if not self._policy.permits(payload.classification, provider.locality):
             raise EgressViolation(
@@ -73,7 +75,12 @@ class EgressGuard:
                 "classification": str(payload.classification),
             },
         )
-        return payload.value
+        return Released(
+            payload.value,
+            payload.classification,
+            provider.name,
+            _key=_GUARD_ONLY,
+        )
 
     # ── startup ───────────────────────────────────────────────────────────────
     def validate_startup(self, handles: Classification) -> None:
