@@ -1,5 +1,11 @@
 # Documentation Intelligence AI — Technical Design
 
+> **Project paused at STEP 1.** The organisation chose to improve Microsoft Copilot over
+> the existing SharePoint library instead of building this system — see
+> [`SHAREPOINT.md`](SHAREPOINT.md), whose §3 lists the requirements below that the Copilot
+> route cannot satisfy. This document stands as the design that was reviewed and as the
+> specification of what the alternative gives up.
+
 Status: **revision 3 — incorporates the second architecture review.**
 **STEP 1 (skeleton) is implemented and committed**; STEP 2 (schema) has not started.
 
