@@ -70,7 +70,12 @@ class LocalEmbeddings(Provider):
 
 # ── answering ─────────────────────────────────────────────────────────────────
 class ClaudeLLM(Provider):
-    name = "claude-opus-5"
+    # Sonnet 5 rather than Opus 5: $2/$10 per MTok against $5/$25, roughly 2.5x cheaper
+    # per answer. The job here is reasoning over evidence that retrieval has already
+    # found, not open-ended reasoning, which is where the cheaper model holds up well.
+    # Revisit against the golden dataset (§17.1) once it exists — that is what turns
+    # this from a guess into a measurement.
+    name = "claude-sonnet-5"
     locality = Locality.CLOUD
     capability = Capability.LLM
     lands_in_step = "STEP 5"

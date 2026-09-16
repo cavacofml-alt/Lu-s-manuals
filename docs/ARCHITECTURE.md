@@ -40,7 +40,7 @@ Everything else — OCR, images, export, the viewer — is engineering work with
 
 **Recommended stack:** Python 3.12 / FastAPI / SQLAlchemy 2.x / PostgreSQL 16 + pgvector /
 pypdfium2 + pdfplumber (permissively licensed — see §4.1) / Tesseract (OCR fallback) /
-Claude Opus 5 for answering / React + Vite + pdf.js.
+Claude Sonnet 5 for answering / React + Vite + pdf.js.
 No Redis, no Celery, no separate vector DB, no object store in the MVP. Rationale throughout.
 
 Decisions still open, and what binds them, are consolidated in **§21 Open Architectural
@@ -1254,7 +1254,7 @@ business fact I cannot infer.
 
 ## 12. LLM architecture and hallucination control [§14]
 
-**Model: `claude-opus-5`** for answering (1M context, $5/$25 per MTok). `claude-haiku-4-5` for the
+**Model: `claude-sonnet-5`** for answering (1M context, $2/$10 per MTok; chosen over Opus 5 on cost — see §18). `claude-haiku-4-5` for the
 cheap, high-volume ingest-time jobs (image descriptions, optional chunk contextualisation) where
 quality requirements are lower and volume is thousands of calls.
 
@@ -1459,15 +1459,32 @@ This runs entirely on-premises if the documentation's confidentiality requires i
 self-hosted embedding model and reranker, the only egress is the Claude API call carrying the
 retrieved passages, which can itself be reviewed or replaced via `LLMProvider`.
 
-**Cost.** Indicative, at first-party API rates (Opus 5: $5/MTok in, $25/MTok out):
+**Cost.** The answering model is **Claude Sonnet 5** ($2/MTok in, $10/MTok out), chosen by the
+product owner over Opus 5 ($5/$25) for roughly 2.5× lower cost per answer. The reasoning is sound
+for this workload: the model reasons over evidence retrieval has already selected, rather than
+open-endedly, which is where a cheaper model holds up. It is a quality/cost trade nonetheless, and
+the golden dataset (§17.1) is what turns it from a judgement into a measurement — faithfulness and
+refusal correctness are the metrics that would show a regression, and both should be run against
+Opus 5 as a comparison once the dataset exists.
 
-| Item | Estimate |
-|---|---|
-| Answer (≈12 passages ≈ 9K input, ≈700 output) | ≈ $0.06, less with caching |
-| Ingest image description (Haiku 4.5) | ≈ $0.001 per image |
-| Embeddings (self-hosted) | infra only |
-| 500 documents × 200 pages, one-off ingest | dominated by OCR CPU time, not API spend |
-| 200 answers/day | ≈ $12/day ≈ $350/month |
+| Item | Sonnet 5 | (Opus 5, for comparison) |
+|---|---|---|
+| Answer (≈12 passages ≈ 9K input, ≈700 output) | **≈ $0.025** | ≈ $0.063 |
+| 20 answers/day | ≈ $15/month | ≈ $38/month |
+| 50 answers/day | ≈ $38/month | ≈ $95/month |
+| 200 answers/day | ≈ $150/month | ≈ $380/month |
+| Ingest image description (Haiku 4.5) | ≈ $0.001 per image | — |
+| Embeddings (self-hosted) | infrastructure only | — |
+| 500 documents × 200 pages, one-off ingest | dominated by OCR CPU time, not API spend | — |
+
+Prompt caching (§12.4) reduces the input side further, since the system prompt and answer schema
+are stable across every request.
+
+**API billing is separate from any Claude.ai subscription.** A Pro, Team or Enterprise seat covers a
+person using the chat interface; it grants neither API access nor API credits. This application
+authenticates its users against the organisation's own identity provider and holds a single API key
+server-side, so **no end user needs a Claude account of any kind** — which is the property that
+makes it deployable to everyone rather than to licence holders.
 
 The dominant *recurring* cost is answering; the dominant *one-off* cost is ingestion CPU. If answer
 volume grows, the first lever is prompt caching and evidence-set size, not a model downgrade.
@@ -1556,7 +1573,7 @@ one to two years?**"
 | D4 | **PyMuPDF as an optional adapter** | Not a default dependency; available for AGPL-accepting or commercially licensed deployments | Only if extraction quality proves insufficient | Low |
 | D5 | **Structure extraction escalation** | Docling (MIT) if heading/section detection is weak on the real corpus | STEP 3, decided by measurement | Medium — heavier deployment |
 | D6 | **Storage** | Local content-addressed filesystem | When multi-node or durability requirements appear | Low — `StorageProvider` port; S3 adapter ≈80 lines + a copy job |
-| D7 | **LLM provider** | Claude Opus 5 | STEP 6 | Low in code; answer quality must be re-evaluated against the golden dataset |
+| D7 | **Answering model** | Claude Sonnet 5 — chosen over Opus 5 for ~2.5x lower cost | STEP 5 | Low in code (one setting); quality delta must be measured against the golden dataset, not assumed |
 | D8 | **Reranker** | Local `bge-reranker-v2-m3` | STEP 4 | Low — `Reranker` port; LLM reranker comparable via the eval suite |
 | D9 | **Release ordering scheme** | `integer[]` + curator-confirmed `sort_override` | First release registered | Low — data fix, not a deploy |
 | D10 | **Authority model weights** | Draft defaults in §11 | Needs your corpus and business input | Low — configuration |

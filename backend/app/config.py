@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     vision_provider: str = "claude_vision"  # claude_vision | local_vision | none
     ocr_provider: str = "tesseract"  # tesseract | cloud_ocr | none
 
+    llm_model_id: str = "claude-sonnet-5"
     embedding_model_id: str = "voyage-3"
     embedding_dimensions: int = 1024
 
