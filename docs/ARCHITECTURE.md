@@ -112,38 +112,33 @@ without rewriting business logic.
 
 ### 2.3 Ports (provider abstractions) [§21]
 
+Every provider that can receive document content is a `Provider` subclass declaring a `Capability`
+and a `Locality`, with **one** public entry point:
+
 ```python
-class LLMProvider(Protocol):
-    async def answer(self, prompt: GroundedPrompt) -> StructuredAnswer: ...
+class Provider:
+    name: str
+    locality: Locality        # cloud | local — does using this disclose content?
+    capability: Capability    # embedding | llm | rerank | vision | ocr | storage | …
 
-class EmbeddingProvider(Protocol):
-    dimensions: int
-    model_id: str
-    async def embed_documents(self, texts: list[str]) -> list[Vector]: ...
-    async def embed_query(self, text: str) -> Vector: ...
-
-class Reranker(Protocol):
-    async def rerank(self, query: str, candidates: list[Candidate]) -> list[Scored]: ...
-
-class DocumentProcessor(Protocol):        # one per source format
-    def supports(self, mime: str) -> bool
-    def process(self, path: Path) -> ExtractedDocument: ...
-
-class OcrEngine(Protocol):
-    def ocr_page(self, image: PageImage) -> OcrResult: ...   # text + per-word confidence
-
-class StorageProvider(Protocol):
-    def put(self, key: str, data: BinaryIO) -> StorageRef: ...
-    def open(self, ref: StorageRef) -> BinaryIO: ...
-    def signed_url(self, ref: StorageRef, ttl: timedelta) -> str: ...
-
-class AnswerRenderer(Protocol):           # PDF, email, future formats
-    def render(self, answer: StructuredAnswer) -> bytes: ...
+    def submit(self, released: Released[Any]) -> Any:
+        # refuses anything not cleared by EgressGuard.release() for THIS provider
+        ...
+    def _process(self, payload: Any) -> Any:   # subclasses implement this
+        ...
 ```
 
-`EmbeddingProvider.model_id` and `.dimensions` are part of the interface deliberately: embeddings
-are only comparable within a single model, so the model identity determines which table a vector is
-written to and read from, and a dimension mismatch is caught at startup (§3.6).
+An earlier revision also declared a parallel set of `Protocol` interfaces in
+`app/adapters/ports.py` — `StorageProvider.put(key, BinaryIO)`,
+`EmbeddingProvider.embed_documents(list[str])` and others — taking raw content with no locality and
+no guard. Nothing referenced them, but a file named "Provider interfaces" is exactly what a
+developer implementing storage would find first, and implementing against it would have produced a
+second egress path that no policy covered. **They are deleted.** There is one provider mechanism,
+not two.
+
+Model identity (`embedding_model_id`, `dimensions`) lives in configuration and in the
+`embedding_models` registry rather than on the interface, since it determines which table a vector
+is written to and a mismatch is caught at startup (§3.6).
 
 ---
 
@@ -942,6 +937,45 @@ error reports. Document titles and filenames are treated as content, because a f
 permitted and are what makes debugging possible (§35). A test asserts the audit record contains no
 payload; the harder cases — exception messages that interpolate content, a tracing library capturing
 function arguments — are a STEP 3 concern and are listed there.
+
+### 8.1.4 What stops a *future* content sink escaping the policy
+
+The review's closing question, answered case by case. The instruction was to demonstrate what the
+code already guarantees before changing anything, so: here is what it guaranteed, which was less
+than the previous revision implied.
+
+**What was actually true before this revision: nothing forced any of them.** Reserving
+`Capability.STORAGE` in an enum is a signpost, not a mechanism. And the audit found an active
+hazard rather than a merely missing one — `app/adapters/ports.py` declared `StorageProvider`,
+`DocumentProcessor` and `EmbeddingProvider` protocols taking raw bytes and strings, unreferenced by
+anything, in the file a developer would naturally implement against. That file is now deleted
+(§2.3); its existence was the "second forgotten egress mechanism" this question was looking for.
+
+**The mechanism now.** `tests/unit/test_adapter_inventory.py` walks `app/adapters/` and fails CI
+when any class there is not a `Provider` subclass, unless it is listed in `EXEMPT` with a written
+reason. Two further inventory tests assert that every provider declares a `Capability` and a
+`Locality`, and that no provider exposes a public method other than `submit` — the latter closing
+the specific shape of the original bypass, where a public method took a bare value.
+
+Verified by writing each of the review's three components the natural way and running CI:
+
+| Future component, written without the guard | Result |
+|---|---|
+| `S3Storage.put(key, pdf_bytes)` | **CI fails** — not a `Provider` |
+| `CloudPdfParser.process(pdf_bytes)` | **CI fails** — not a `Provider` |
+| A `Provider` with an extra public `summarise(text)` | **CI fails** — second entry point |
+
+**Telemetry is the honest exception, and the answer is no.** `logging` is a process-global
+facility; any line of code anywhere can call `logger.info(chunk_text)` and no architecture in
+Python can prevent it. There is no mechanism here and it would be dishonest to imply one. What
+exists is the exclusion rule in §8.1.3 C, a test asserting the audit record carries no payload, and
+review. If stronger assurance is wanted, it has to come from outside the process — a log pipeline
+that redacts, or no cloud log sink at all — and that is an infrastructure decision, not a code one.
+
+So the accurate summary, in the review's own three categories: adapters are **prevented in
+runtime** from being reached without a clearance, and **prevented in CI** from existing outside the
+policy; telemetry is **convention only**. Neither is a sandbox, and §8.1.2's limits still apply to
+both.
 
 #### Property 6 — the ingestion boundary
 
