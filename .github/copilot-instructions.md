@@ -19,6 +19,8 @@ Verified on PostgreSQL 16.13. No downstream layer can detect it.
 - Never `plainto_tsquery` for technical identifiers: it drops adjacency, so `E-1052`
   matches a page where `e` and `-1052` appear far apart. Phrase queries only.
 - Do not "fix" prose recall by switching to `english`. That trade is not available. (§9.1)
+- CI enforces this: `tests/unit/test_fts_configuration_is_locked.py` fails on `english`
+  in any SQL, and on a one-argument `to_tsvector()` whose configuration is implicit.
 
 ### 2. Document content reaches a provider only through `EgressGuard.release()`
 
