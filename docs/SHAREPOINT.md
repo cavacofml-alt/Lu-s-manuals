@@ -3,11 +3,14 @@
 Direção adoptada em substituição da aplicação autónoma. Este documento é o plano de
 trabalho; não requer programação.
 
-A premissa que o orienta: **a qualidade das respostas do Copilot é determinada sobretudo
-pelo que está na biblioteca, não por como se lhe pede.** Instruções controlam a forma da
-resposta; a arrumação dos documentos controla o que ele encontra. A maior parte dos erros
-que preocupam neste projeto — misturar releases, citar o manual errado, responder com um
-procedimento revogado — são erros de recuperação, e resolvem-se na origem.
+A **hipótese** que o orienta — e é uma hipótese, não um facto estabelecido: a qualidade das
+respostas do Copilot é determinada sobretudo pelo que está na biblioteca, não por como se
+lhe pede. O raciocínio é que instruções atuam **depois** da recuperação, e os erros que mais
+preocupam aqui — misturar releases, citar o manual errado, responder com um procedimento
+revogado — acontecem **durante** a recuperação, que não é nossa.
+
+O raciocínio é plausível e não está verificado. A secção 5 desenha a medição de forma a
+testá-lo em vez de o assumir; se se revelar falso, é a ordem de trabalhos que muda.
 
 ---
 
@@ -153,20 +156,42 @@ com dados em vez de opiniões.
 
 ---
 
-## 5. Ordem de trabalhos sugerida
+## 5. Ordem de trabalhos — desenhada para testar a hipótese
 
-| | Ação | Esforço | Impacto |
-|---|---|---|---|
-| 1 | Reunir as 30–50 perguntas e medir o Copilot **hoje** | 1 dia | Base de comparação |
-| 2 | Separar biblioteca atual do arquivo | Horas | **Alto** |
-| 3 | Criar as colunas de metadados e preenchê-las | Dias | Alto |
-| 4 | Corrigir títulos, OCR nos digitalizados | Dias | Médio |
-| 5 | Repetir a medição | Horas | Mostra o que ganharam |
-| 6 | Agente declarativo, se houver licenciamento | Dias | Médio |
-| 7 | Repetir a medição | Horas | Decide se chega |
+A primeira versão desta secção tinha um defeito: mandava arrumar a biblioteca **e**
+configurar o agente, medindo no fim. Isso mede o efeito conjunto e não distingue o que cada
+intervenção trouxe — exatamente a pergunta que a hipótese da secção introdutória levanta.
 
-O passo 1 antes do passo 2 é deliberado: sem uma medição inicial, não saberão o que as
-mudanças trouxeram, e a discussão volta a ser de opinião.
+As duas alavancas têm de ser medidas **em separado**, e podem sê-lo sem custo adicional,
+porque o esforço é o mesmo e só muda a ordem.
+
+| | Ação | O que mede |
+|---|---|---|
+| **0** | Reunir as 30–50 perguntas | — |
+| **1** | Medir o Copilot **como está hoje** | Linha de base |
+| **2A** | Agente declarativo com instruções, **biblioteca inalterada** | O que as instruções sozinhas valem |
+| **3** | Medir de novo | Efeito **isolado** do prompt |
+| **2B** | Arquivar releases antigas e pôr metadados, **agente desligado** | O que a arrumação sozinha vale |
+| **4** | Medir de novo | Efeito **isolado** da biblioteca |
+| **5** | Ligar as duas | — |
+| **6** | Medir de novo | Efeito conjunto, e se há sobreposição |
+
+Passos 2A e 2B são independentes e podem trocar de ordem. Se não houver licenciamento de
+Copilot Studio, 2A cai e mede-se apenas a biblioteca — perde-se o teste da hipótese, e isso
+deve ser dito em vez de se concluir na mesma que a biblioteca era o fator dominante.
+
+Três resultados possíveis, e cada um leva a um sítio diferente:
+
+- **A biblioteca move muito mais do que o prompt** — a hipótese confirma-se, o esforço vai
+  para conteúdo e metadados.
+- **O prompt move tanto ou mais** — a hipótese estava errada, e vale mais investir no agente
+  e menos em reorganizar centenas de documentos. Seria a conclusão mais barata de todas.
+- **Nenhum move o suficiente** — o problema não é de arrumação nem de instruções, e a
+  limitação é estrutural. Aí a decisão de não construir um sistema próprio é que volta à
+  mesa, com dados.
+
+O passo 1 antes de tudo mantém-se, e não depende de nenhuma análise prévia: sem linha de
+base, nenhuma das três conclusões acima é possível.
 
 ---
 

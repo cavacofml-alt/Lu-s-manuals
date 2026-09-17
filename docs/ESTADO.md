@@ -84,11 +84,16 @@ Tudo em `docs/`:
   registo de duas rondas e métricas calculadas.
 - **`modelo-alteracoes-release.md`** — modelo para o documento de alterações entre releases.
 
-A tese que orienta tudo isto: **a qualidade das respostas é determinada pela arrumação da
-biblioteca, não pelas instruções dadas ao assistente.** O retriever é da Microsoft e não se
-altera; as únicas alavancas estão no conteúdo e nos metadados. Daí a ação de maior retorno
-ser arquivar as releases antigas para fora da biblioteca indexada — não é possível pedir ao
-Copilot que prefira a release atual, só é possível tirar-lhe as outras da frente.
+A **hipótese** que orienta tudo isto — corrigida após auditoria externa, que observou
+com razão que estava a ser apresentada como facto: a qualidade das respostas é determinada
+sobretudo pela arrumação da biblioteca, não pelas instruções dadas ao assistente. O
+raciocínio é que o retriever é da Microsoft e as instruções atuam depois de ele já ter
+escolhido o que devolver.
+
+É plausível e **não está verificada**. A ordem de trabalhos em `SHAREPOINT.md` §5 foi
+redesenhada para a testar: as duas alavancas — instruções e biblioteca — passam a ser
+medidas em separado, porque na primeira versão eram aplicadas ao mesmo tempo e o resultado
+não distinguiria qual delas produziu o efeito.
 
 ---
 
@@ -137,6 +142,7 @@ Nenhum destes foi fornecido. Sem os dois primeiros, a avaliação não pode arra
 | Arquivar as releases antigas ser adiado | É a única ação que resolve mesmo a mistura de versões. Sem ela, o resto são melhorias marginais |
 | Escrever documentos de síntese que se desatualizam | Uma síntese desatualizada é pior do que nenhuma, porque parece autoritativa |
 | A quarta mudança de direção | Três mudanças em poucos dias. Cada uma foi defensável; a próxima devia exigir dados, não intuição |
+| Adiar a medição à espera de mais análise | A linha de base não depende de nenhuma auditoria: não altera nada, não custa nada, e é input obrigatório para testar a hipótese. Análise e medição são paralelas |
 
 ### 4.5 O que esta direção não vai dar
 
