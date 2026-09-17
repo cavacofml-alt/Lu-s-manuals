@@ -3,30 +3,76 @@
 Direção adoptada em substituição da aplicação autónoma. Este documento é o plano de
 trabalho; não requer programação.
 
-A **hipótese** que o orienta — e é uma hipótese, não um facto estabelecido: a qualidade das
-respostas do Copilot é determinada sobretudo pelo que está na biblioteca, não por como se
-lhe pede. O raciocínio é que instruções atuam **depois** da recuperação, e os erros que mais
-preocupam aqui — misturar releases, citar o manual errado, responder com um procedimento
-revogado — acontecem **durante** a recuperação, que não é nossa.
+A tese que o orienta, reformulada após auditoria externa que mostrou a primeira versão
+demasiado categórica:
 
-O raciocínio é plausível e não está verificado. A secção 5 desenha a medição de forma a
-testá-lo em vez de o assumir; se se revelar falso, é a ordem de trabalhos que muda.
+> **A recuperação está fortemente limitada pela qualidade, estrutura e seleção da
+> biblioteca. As instruções e a configuração do agente podem melhorar significativamente a
+> escolha das fontes e o comportamento da resposta, mas não substituem uma biblioteca bem
+> organizada.**
+
+A diferença face à formulação anterior — "a biblioteca determina, as instruções não contam"
+— não é de ênfase. São três camadas distintas, e eu tinha colapsado as duas primeiras:
+
+| Camada | O que controla |
+|---|---|
+| Conteúdo e documentos | O que **pode** ser recuperado |
+| Metadados, estrutura, *knowledge sources* | O que é **mais provável** ser selecionado |
+| Instruções e orquestração | Como o agente **decide usar** o que recuperou |
+
+A camada do meio é a que eu tinha subestimado: no Copilot Studio, o nome e a descrição de
+uma *knowledge source* influenciam a seleção feita pela orquestração generativa. Isso é
+configuração, não conteúdo, e atua **antes** da resposta — não depois.
+
+O que continua verdadeiro: nenhuma instrução cria evidência que não existe, e nenhuma
+impede o sistema de recuperar uma release antiga que esteja no índice ativo. A secção 5
+mede as camadas em separado em vez de as assumir.
 
 ---
 
 ## 1. Higiene da biblioteca — a intervenção de maior retorno
 
-### 1.1 Arquivar as versões antigas
+### 1.1 Retirar as versões antigas do conhecimento ativo
 
-É o passo mais importante de todo o documento. Se a release 7.3 não estiver na biblioteca
-indexada, o Copilot não a pode misturar com a 7.4.
+Continua a ser a intervenção de maior retorno. Mas **"arquivar" precisa de ser definido**,
+porque as formas possíveis não são equivalentes e só uma tem efeito documentado sobre a
+recuperação.
 
-- Uma biblioteca **"Documentação atual"**, indexada, apenas com a release em vigor.
-- Uma biblioteca **"Arquivo"**, excluída da indexação do Copilot, com tudo o resto.
-- Quando sai uma release nova, o documento anterior move-se para o arquivo no mesmo dia.
+| Estratégia | Efeito sobre o Copilot |
+|---|---|
+| Pasta `/arquivo` na mesma biblioteca | **Nenhum garantido.** O conteúdo continua no índice ativo |
+| Coluna `Estado = Substituído` | **Nenhum garantido.** É um sinal, não uma exclusão |
+| **Site ou biblioteca separada**, fora das fontes do agente | Eficaz **se** houver um agente com fontes definidas |
+| **Microsoft 365 Archive** | **Exclusão documentada.** Ficheiros arquivados ficam fora do *grounding* do Copilot e não são por ele pesquisáveis |
 
-Sem isto, nenhuma instrução impede respostas que combinam versões, porque ambas as versões
-são evidência legítima aos olhos do sistema.
+A última é a descoberta útil desta auditoria, e está verificada na documentação da
+Microsoft: o conteúdo arquivado é retirado do índice ativo precisamente para não diluir as
+respostas.
+
+#### Mas há uma tensão que é preciso decidir, não contornar
+
+As duas estratégias eficazes **não são complementares — são alternativas**, e a diferença
+importa:
+
+- **Microsoft 365 Archive** retira o conteúdo do Copilot **por completo**. A mistura de
+  releases desaparece. Mas a pergunta legítima *"como é que isto se fazia na 7.2?"* deixa de
+  ter resposta possível, porque o conteúdo já não é pesquisável.
+- **Site separado + *knowledge source* dedicada** mantém o histórico acessível e scoped:
+  uma fonte "atual" e uma "histórica", com descrições que orientam a orquestração a escolher
+  a segunda apenas quando a pergunta o pedir explicitamente. Em troca, o histórico continua
+  no índice — a separação depende da orquestração escolher bem, não de o conteúdo estar
+  ausente.
+
+A decisão depende de uma pergunta que a organização tem de responder: **alguém precisa de
+consultar releases antigas através do Copilot?**
+
+- Se não — Microsoft 365 Archive, e o problema fica estruturalmente resolvido.
+- Se sim — site separado com fontes scoped, e a correção passa a depender de configuração
+  que tem de ser medida.
+
+Note-se também que o arquivo ao nível do ficheiro era ainda funcionalidade em pré-visualização
+à data desta análise; convém confirmar o estado atual antes de desenhar o processo em cima
+dela.
 
 ### 1.2 Metadados
 
@@ -115,14 +161,24 @@ Registado para não haver surpresas mais tarde:
 | Requisito do briefing | Estado nesta abordagem |
 |---|---|
 | Citar a página exata e abrir o documento nela (§23, §49-I/J) | **Não atingível** |
-| Mostrar o screenshot original da documentação (§5, §6, §49-K) | **Não atingível** |
-| Comparar o que mudou entre releases (§10) | **Não atingível** |
+| *Interpretar* uma tabela ou imagem para responder | **Por verificar** — a capacidade existe; falta provar que funciona no corpus real |
+| *Mostrar* o screenshot original dentro da resposta (§5, §6, §49-K) | **Não atingível** |
+| Comparar automaticamente o que mudou entre releases (§10) | **Não atingível** — mitigável escrevendo o documento do §7.2 |
 | Garantir a recusa quando falta evidência (§14, §49-O) | Melhora, sem garantia |
 | Preferir a release atual (§9, §49-N) | Atingível **via arquivo**, não via instruções |
 | Export PDF/email estruturado (§25, §26) | Fora de âmbito |
 
-As três primeiras dependem de indexar por página, extrair imagens com contexto e alinhar
-secções entre versões. Nenhuma é acessível a partir de instruções.
+A auditoria assinalou, com razão, que eu tinha sido demasiado categórico sobre imagens e
+tabelas. Há que separar duas coisas que eu tinha juntado:
+
+- **Ler** uma tabela ou um diagrama para extrair a resposta — documentado como possível
+  conforme a fonte e a configuração. Passa de "não atingível" a **"por testar"**, e entra na
+  avaliação como categoria própria.
+- **Mostrar** a imagem original na resposta, com a página de onde veio — isso continua a
+  não ser atingível, e era esse o requisito §6 do briefing.
+
+As restantes dependem de indexar por página e alinhar secções entre versões. Não são
+acessíveis a partir de instruções.
 
 ---
 
@@ -165,20 +221,35 @@ intervenção trouxe — exatamente a pergunta que a hipótese da secção intro
 As duas alavancas têm de ser medidas **em separado**, e podem sê-lo sem custo adicional,
 porque o esforço é o mesmo e só muda a ordem.
 
-| | Ação | O que mede |
-|---|---|---|
-| **0** | Reunir as 30–50 perguntas | — |
-| **1** | Medir o Copilot **como está hoje** | Linha de base |
-| **2A** | Agente declarativo com instruções, **biblioteca inalterada** | O que as instruções sozinhas valem |
-| **3** | Medir de novo | Efeito **isolado** do prompt |
-| **2B** | Arquivar releases antigas e pôr metadados, **agente desligado** | O que a arrumação sozinha vale |
-| **4** | Medir de novo | Efeito **isolado** da biblioteca |
-| **5** | Ligar as duas | — |
-| **6** | Medir de novo | Efeito conjunto, e se há sobreposição |
+Três camadas, três intervenções, uma medição depois de cada. A auditoria separou a camada
+que eu tinha colapsado — *knowledge sources* não é a mesma coisa que instruções, nem a
+mesma coisa que arrumar a biblioteca.
 
-Passos 2A e 2B são independentes e podem trocar de ordem. Se não houver licenciamento de
-Copilot Studio, 2A cai e mede-se apenas a biblioteca — perde-se o teste da hipótese, e isso
-deve ser dito em vez de se concluir na mesma que a biblioteca era o fator dominante.
+| | Intervenção | Camada que isola | Depende de |
+|---|---|---|---|
+| **0** | Reunir as perguntas | — | Pessoas da organização |
+| **1** | **Medir como está hoje** | Linha de base | Nada |
+| **2** | Definir *knowledge sources* com âmbito e descrições explícitas | Seleção de fontes | Copilot Studio |
+| **3** | Medir | Efeito isolado do *scoping* | |
+| **4** | Retirar releases antigas do conhecimento ativo (§1.1) + metadados | Conteúdo recuperável | Autoridade sobre a biblioteca |
+| **5** | Medir | Efeito isolado da biblioteca | |
+| **6** | Instruções e orquestração | Comportamento da resposta | Copilot Studio |
+| **7** | Medir | Efeito isolado das instruções | |
+| **8** | Comparar tudo | Que camada move o quê | |
+
+Se não houver licenciamento de Copilot Studio, os passos 2 e 6 caem e mede-se apenas a
+biblioteca. Nesse caso **não se conclui que a biblioteca era o fator dominante** — conclui-se
+que as outras camadas não foram testadas. É uma distinção que se perde com facilidade.
+
+Três resultados possíveis, e cada um leva a um sítio diferente:
+
+- **A biblioteca move muito mais** — a tese confirma-se; o esforço vai para conteúdo e
+  metadados.
+- **O *scoping* ou as instruções movem tanto ou mais** — eu estava errado, e vale mais
+  investir em configuração do agente do que em reorganizar centenas de documentos. Seria a
+  conclusão mais barata de todas.
+- **Nenhum move o suficiente** — a limitação é estrutural, e a decisão de não construir um
+  sistema próprio volta à mesa, agora com dados em vez de intuição.
 
 Três resultados possíveis, e cada um leva a um sítio diferente:
 
@@ -296,3 +367,78 @@ Também não se controlam as permissões a partir daqui: o Copilot só devolve a
 que essa pessoa já podia abrir. Um documento com permissões restritas não aparece nas
 respostas de quem não lhe acede — o que é correto, mas explica respostas incompletas que de
 outra forma parecem inexplicáveis.
+
+
+---
+
+## 10. Alavancas do M365 identificadas em auditoria externa
+
+Acrescentadas depois de uma auditoria que pesquisou a documentação da Microsoft. São a área
+onde eu tinha menos conhecimento e onde a auditoria acrescentou mais.
+
+### 10.1 *Knowledge sources* com âmbito definido
+
+Em vez de deixar o agente procurar em toda a biblioteca, podem definir-se fontes específicas
+— sites, bibliotecas, pastas, ficheiros, listas. É a diferença entre **controlar a superfície
+de recuperação** e **pedir ao modelo que prefira o mais recente**. A primeira é estrutural;
+a segunda é uma sugestão.
+
+### 10.2 As descrições das fontes influenciam a seleção
+
+O ponto que eu tinha subestimado por completo. O nome e a descrição de uma *knowledge source*
+entram na decisão da orquestração generativa sobre qual usar. Isto é configuração a atuar
+**antes** da resposta, não depois — e contradiz a minha formulação inicial de que só o
+conteúdo conta.
+
+Na prática, duas descrições assim são hipótese testável, não teoria:
+
+> "Documentação operacional em vigor, release 7.4. Usar para qualquer procedimento aplicável hoje."
+
+> "Documentação histórica, releases 7.1 a 7.3. Usar apenas quando a pergunta mencione explicitamente uma release anterior."
+
+### 10.3 Agent Builder não chega para um requisito forte de isolamento
+
+Para o requisito *"nunca responder fora da documentação"*, o Agent Builder não permite
+bloquear por completo o conhecimento geral do modelo. Para controlo mais rigoroso de
+abstenção, é Copilot Studio.
+
+Isto é relevante porque a recusa é **o requisito que define este projeto** desde o briefing
+original. Se ele for inegociável, a escolha da ferramenta não é indiferente.
+
+### 10.4 Avaliação automatizada no Copilot Studio
+
+Existe avaliação de agentes com métricas que coincidem quase exatamente com o que a folha
+manual mede: *relevance*, *groundedness*, *completeness* e *abstention* — esta última sendo
+se o agente tentou responder. Há conjuntos de teste que podem ser construídos a partir das
+próprias fontes de conhecimento.
+
+**Isto não substitui a folha manual — complementa-a**, e a divisão de trabalho é clara:
+
+| Automático | Humano |
+|---|---|
+| Respondeu? | **Usou a release certa?** |
+| Está fundamentado nas fontes? | O procedimento está correto na prática? |
+| Está completo? | Contradiz outra release? |
+| Absteve-se? | É operacionalmente seguro seguir isto? |
+
+A coluna da direita não é automatizável, e contém a métrica que mais importa. Um avaliador
+automático que verifique *groundedness* dá resposta positiva a um texto perfeitamente
+fundamentado — na release errada.
+
+### 10.5 Permissões são parte da recuperação
+
+O Copilot só devolve a cada pessoa o que ela já podia abrir. Uma resposta incompleta pode
+não ser falha de recuperação — pode ser a pessoa não ter acesso ao documento. Ao registar
+resultados da avaliação, convém anotar quem fez a pergunta: duas pessoas com permissões
+diferentes podem obter respostas diferentes à mesma pergunta, e isso não é um defeito.
+
+### 10.6 Não confundir recuperação com resposta
+
+A formulação é do auditor e merece ficar como princípio do projeto:
+
+> A métrica principal não é *"o Copilot respondeu?"* mas **"o Copilot recuperou e usou a
+> evidência certa, para a versão certa?"**. Só depois: a resposta estava bem escrita?
+
+É o mesmo erro contra o qual todo este projeto foi desenhado, noutra roupagem: uma resposta
+fluente, com citação real, tirada da release errada passa em qualquer métrica automática de
+fundamentação e está operacionalmente errada.

@@ -84,16 +84,20 @@ Tudo em `docs/`:
   registo de duas rondas e métricas calculadas.
 - **`modelo-alteracoes-release.md`** — modelo para o documento de alterações entre releases.
 
-A **hipótese** que orienta tudo isto — corrigida após auditoria externa, que observou
-com razão que estava a ser apresentada como facto: a qualidade das respostas é determinada
-sobretudo pela arrumação da biblioteca, não pelas instruções dadas ao assistente. O
-raciocínio é que o retriever é da Microsoft e as instruções atuam depois de ele já ter
-escolhido o que devolver.
+A tese que orienta tudo isto, reformulada após uma segunda auditoria externa que pesquisou
+a documentação da Microsoft:
 
-É plausível e **não está verificada**. A ordem de trabalhos em `SHAREPOINT.md` §5 foi
-redesenhada para a testar: as duas alavancas — instruções e biblioteca — passam a ser
-medidas em separado, porque na primeira versão eram aplicadas ao mesmo tempo e o resultado
-não distinguiria qual delas produziu o efeito.
+> A recuperação está fortemente limitada pela qualidade, estrutura e seleção da biblioteca.
+> As instruções e a configuração do agente melhoram significativamente a escolha das fontes
+> e o comportamento da resposta, mas não substituem uma biblioteca bem organizada.
+
+A versão anterior — "a biblioteca determina, as instruções não contam" — estava errada, e
+não por ênfase. Havia **três** camadas e eu tinha colapsado duas: conteúdo (o que pode ser
+recuperado), *knowledge sources* e metadados (o que é provável ser selecionado) e instruções
+(como o agente usa o que recuperou). A camada do meio é configuração que atua **antes** da
+resposta, e era a que eu ignorava.
+
+A ordem de trabalhos em `SHAREPOINT.md` §5 mede as três em separado.
 
 ---
 
@@ -120,13 +124,37 @@ operacional, e depende de pessoas da organização, não de mais desenho.
 
 Nenhum destes foi fornecido. Sem os dois primeiros, a avaliação não pode arrancar.
 
+### 4.2.1 Duas verificações que mudaram o plano
+
+Confirmadas contra a documentação da Microsoft, e ambas alteram decisões:
+
+**O arquivo tem de ser o mecanismo certo.** Mover para uma pasta `/arquivo` ou marcar
+`Estado = Substituído` não retira nada do índice ativo. O **Microsoft 365 Archive** retira:
+o conteúdo arquivado fica fora do *grounding* do Copilot e não é por ele pesquisável.
+
+Mas isso traz uma tensão que não estava visível: retirar **por completo** resolve a mistura
+de releases e, ao mesmo tempo, torna impossível responder a *"como se fazia na 7.2?"*. A
+alternativa — site separado com fontes de conhecimento definidas — mantém o histórico
+acessível mas depende de a orquestração escolher bem. **São alternativas, não complementos**,
+e a escolha depende de saber se alguém precisa mesmo de consultar releases antigas por esta
+via.
+
+**Imagens e tabelas: eu tinha sido categórico a mais.** *Interpretar* uma tabela ou diagrama
+para responder é possível conforme a fonte e a configuração — passa de "não atingível" a
+"por testar", e entra na avaliação como categoria própria. *Mostrar* a imagem original dentro
+da resposta, com a página de origem, continua fora de alcance — e era esse o requisito §6.
+
 ### 4.3 Decisões por tomar
 
 - **A documentação é confidencial?** Nunca foi respondido formalmente. Na direção atual
   perde parte da urgência — a documentação já está no SharePoint, ou seja, já numa nuvem de
   terceiros. Mas continua a determinar o que pode ser feito no futuro.
-- **Existe licenciamento de Copilot Studio?** Determina se o agente declarativo é possível.
-  Não confirmado.
+- **Existe licenciamento de Copilot Studio?** Determina se o agente declarativo é possível,
+  e também se as camadas de *scoping* e instruções chegam a ser testadas. Sem ele, mede-se
+  apenas a biblioteca — e a conclusão terá de dizer "as outras camadas não foram testadas",
+  não "a biblioteca era o fator dominante". Não confirmado.
+- **Alguém precisa de consultar releases antigas através do Copilot?** Decide entre
+  Microsoft 365 Archive e site separado com fontes scoped. Ver §4.2.1. Não respondido.
 - **É organizacionalmente possível arquivar as releases antigas?** É a ação de maior
   retorno de todo o plano e pressupõe que alguém tem autoridade para mover documentos e que
   ninguém depende de aceder às versões antigas pela mesma via. Não validado.
