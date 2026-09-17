@@ -191,7 +191,8 @@ O que vale a pena escrever, por ordem de retorno:
 usa, quais são os documentos relevantes e para que serve cada um. Responde às perguntas
 panorâmicas que hoje devolvem fragmentos soltos, e serve de mapa para as outras.
 
-**7.2 Um documento de alterações por release.** O que mudou na 7.4 face à 7.3, em linguagem
+**7.2 Um documento de alterações por release.** Modelo pronto a preencher em
+[`modelo-alteracoes-release.md`](modelo-alteracoes-release.md). O que mudou na 7.4 face à 7.3, em linguagem
 de quem usa: "a confirmação manual no check-in ADL foi removida". Isto responde à pergunta
 que nenhum retriever consegue responder sozinho, porque exige comparar dois documentos que
 nunca estão ambos no resultado.
