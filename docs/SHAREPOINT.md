@@ -160,25 +160,34 @@ Registado para não haver surpresas mais tarde:
 
 | Requisito do briefing | Estado nesta abordagem |
 |---|---|
-| Citar a página exata e abrir o documento nela (§23, §49-I/J) | **Não atingível** |
-| *Interpretar* uma tabela ou imagem para responder | **Por verificar** — a capacidade existe; falta provar que funciona no corpus real |
+| Citar a página exata e abrir o documento nela (§23, §49-I/J) | **Suportado** em Copilot Studio, para PDFs via SharePoint — a validar no corpus real |
+| *Interpretar* uma tabela ou imagem anotada para responder | **Suportado**, incluindo imagens anotadas em PDF — a validar |
 | *Mostrar* o screenshot original dentro da resposta (§5, §6, §49-K) | **Não atingível** |
 | Comparar automaticamente o que mudou entre releases (§10) | **Não atingível** — mitigável escrevendo o documento do §7.2 |
 | Garantir a recusa quando falta evidência (§14, §49-O) | Melhora, sem garantia |
 | Preferir a release atual (§9, §49-N) | Atingível **via arquivo**, não via instruções |
 | Export PDF/email estruturado (§25, §26) | Fora de âmbito |
 
-A auditoria assinalou, com razão, que eu tinha sido demasiado categórico sobre imagens e
-tabelas. Há que separar duas coisas que eu tinha juntado:
+**Esta tabela encolheu duas vezes, e nas duas eu tinha sido categórico a mais.**
 
-- **Ler** uma tabela ou um diagrama para extrair a resposta — documentado como possível
-  conforme a fonte e a configuração. Passa de "não atingível" a **"por testar"**, e entra na
-  avaliação como categoria própria.
-- **Mostrar** a imagem original na resposta, com a página de onde veio — isso continua a
-  não ser atingível, e era esse o requisito §6 do briefing.
+A correção maior é a das **citações por página**: verificado que, no Copilot Studio, um PDF
+adicionado pelo caminho do SharePoint gera uma citação que aponta para a página onde está a
+informação e abre o documento nessa página. Era o requisito §49-I/J, que eu dei por
+impossível duas vezes seguidas. **Está suportado.**
 
-As restantes dependem de indexar por página e alinhar secções entre versões. Não são
-acessíveis a partir de instruções.
+Isto muda a avaliação global desta abordagem mais do que qualquer outra descoberta: dos três
+requisitos que eu classificava como perdidos, um está disponível e outro (interpretar tabelas
+e imagens anotadas) está suportado e por validar. O que resta genuinamente fora de alcance:
+
+- **Mostrar a imagem original dentro da resposta.** Interpretar o conteúdo de uma imagem
+  para responder é uma coisa; devolver o screenshot em si, como o §6 exigia, é outra.
+- **Comparar automaticamente releases**, que exige alinhar secções entre versões. Mitigável
+  escrevendo o documento do §7.2 à mão.
+
+**Consequência prática:** as citações por página dependem do Copilot Studio e do caminho
+certo de configuração. A pergunta "existe licenciamento de Copilot Studio?" deixa de ser um
+detalhe sobre o agente e passa a ser o que decide se o requisito mais valioso do briefing
+está ou não ao alcance. Passa ao topo das decisões pendentes.
 
 ---
 
@@ -442,3 +451,126 @@ A formulação é do auditor e merece ficar como princípio do projeto:
 É o mesmo erro contra o qual todo este projeto foi desenhado, noutra roupagem: uma resposta
 fluente, com citação real, tirada da release errada passa em qualquer métrica automática de
 fundamentação e está operacionalmente errada.
+
+
+---
+
+## 11. Segunda ronda de auditoria — o que falta incorporar
+
+### 11.1 Hierarquia de conhecimento, não apenas âmbito
+
+A camada de *scoping* é mais rica do que "dar menos documentos ao agente". No Copilot Studio,
+as fontes definidas num **nó de generative answers** têm prioridade sobre as fontes ao nível
+do agente, que funcionam como *fallback*.
+
+Isso permite uma hierarquia em vez de uma lista:
+
+```
+Pergunta
+   │
+   ├─ nó específico ──► Documentação atual (7.4)      ← prioridade
+   │
+   └─ nível do agente ─► Documentação histórica        ← fallback
+```
+
+É conceptualmente muito superior a instruir *"prefere a release mais recente"*: a preferência
+passa a ser estrutural em vez de uma sugestão que o modelo pode ou não seguir. Entra na
+experiência 1.
+
+### 11.2 Fonte de conhecimento própria — o plano C
+
+O Copilot Studio permite ligar uma **fonte de conhecimento personalizada**, servida por uma
+API de pesquisa da organização. Isso abre uma terceira posição entre as duas que estávamos a
+tratar como exclusivas:
+
+| | Interface | Recuperação |
+|---|---|---|
+| **A** | Copilot | Microsoft |
+| **B** | Aplicação própria | Própria |
+| **C** | **Copilot** | **Própria** |
+
+A opção C importa por uma razão concreta: se a experiência mostrar *"o Copilot funciona bem,
+exceto na distinção entre releases"*, não é preciso abandonar o Copilot nem reconstruir tudo.
+Substitui-se exatamente a peça que falha — a recuperação — mantendo a interface que toda a
+gente já usa e sem pedir a ninguém que adote uma aplicação nova.
+
+E tem uma consequência para o trabalho parado: **o desenho da camada de recuperação em
+`ARCHITECTURE.md` deixa de ser plano B abandonado e passa a ser um componente possível da
+opção C.** Consciência de versões, citações com página, recuperação híbrida — é precisamente
+o que uma fonte de conhecimento própria teria de fazer.
+
+Não implementar agora. Registar como saída arquitetural, para que a decisão, se vier, seja
+tomada com isto em cima da mesa.
+
+### 11.3 Três métricas, não uma
+
+*Groundedness* automático responde "a resposta está suportada pela evidência recuperada?" —
+e dá positivo a um texto perfeitamente fundamentado na release errada. São três perguntas
+distintas e só a primeira é automatizável:
+
+| Métrica | Pergunta | Automatizável |
+|---|---|---|
+| **Groundedness** | A resposta é suportada pela evidência recuperada? | Sim |
+| **Source correctness** | A evidência recuperada é a fonte que devia ter sido usada? | Não |
+| **Version correctness** | A evidência pertence à release temporalmente correta? | **Não** |
+
+O caso que define o projeto tem este aspeto:
+
+```
+Qualidade da resposta   ✅
+Groundedness            ✅
+Citação                 ✅
+Source correctness      ❌
+Version correctness     ❌
+```
+
+Tudo verde no avaliador automático, e operacionalmente errado. As duas últimas colunas da
+folha de avaliação são a razão de ela existir.
+
+### 11.4 Trios de perguntas em vez de perguntas soltas
+
+Cada procedimento que mudou entre releases gera três perguntas, não uma:
+
+| | Pergunta | Testa |
+|---|---|---|
+| **A** | "Como faço X?" | Recuperação da versão atual |
+| **B** | "Como se fazia X na 7.2?" | Recuperação histórica |
+| **C** | "O procedimento de X mudou entre a 7.2 e a 7.4?" | Comparação entre versões |
+
+Com perguntas soltas, uma falha marca-se como "errada". Com o trio, vê-se **onde** falhou:
+
+```
+A ✅   B ❌   C ❌    →  o histórico não é alcançável
+A ✅   B ✅   C ❌    →  alcança ambos mas não os compara
+A ❌   B ✅   C ❌    →  está a responder com a release errada — o caso perigoso
+```
+
+E o trio é também o instrumento da decisão do §1.1: no cenário Microsoft 365 Archive, a
+pergunta **B não tem resposta possível por construção**. Se ninguém na organização precisar
+de fazer perguntas do tipo B, o Archive resolve o problema estruturalmente; se precisarem, a
+resposta está no que o trio mostrar.
+
+### 11.5 Experiência 4 — decidir o arquivo com dados
+
+Em vez de escolher entre Archive e histórico acessível por argumentação, montar os dois e
+fazer as mesmas perguntas:
+
+| Cenário | Configuração |
+|---|---|
+| **A** | 7.4 ativa · 7.1–7.3 em Microsoft 365 Archive |
+| **B** | 7.4 atual · 7.1–7.3 como fonte histórica com âmbito definido |
+
+O cenário A deve falhar todas as perguntas B do trio, e é isso que se quer verificar: que
+falha **por recusa clara**, não por resposta inventada. O cenário B deve responder às
+perguntas B — e a questão é se acerta nas A sem contaminação.
+
+---
+
+## Princípio do projeto
+
+Formulação vinda da auditoria externa, adotada porque é a melhor síntese de tudo o que foi
+aprendido aqui:
+
+> **A pergunta não é se o Copilot consegue produzir uma resposta fundamentada. É se consegue
+> recuperar e utilizar a evidência correta, da fonte correta e da release correta — e recusar
+> quando essa evidência não existe.**

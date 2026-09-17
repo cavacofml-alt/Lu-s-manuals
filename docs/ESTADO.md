@@ -139,10 +139,15 @@ acessível mas depende de a orquestração escolher bem. **São alternativas, n�
 e a escolha depende de saber se alguém precisa mesmo de consultar releases antigas por esta
 via.
 
-**Imagens e tabelas: eu tinha sido categórico a mais.** *Interpretar* uma tabela ou diagrama
-para responder é possível conforme a fonte e a configuração — passa de "não atingível" a
-"por testar", e entra na avaliação como categoria própria. *Mostrar* a imagem original dentro
-da resposta, com a página de origem, continua fora de alcance — e era esse o requisito §6.
+**Citações ao nível da página existem.** Esta é a correção mais consequente de todo o
+projeto. Verificado: no Copilot Studio, um PDF adicionado pelo caminho do SharePoint gera uma
+citação que aponta para a página onde está a informação e abre o documento nessa página. Eu
+classifiquei isto como "não atingível" duas vezes. **Está suportado**, e era o requisito
+§49-I/J do briefing.
+
+**Imagens e tabelas: também categórico a mais.** Interpretar uma tabela ou uma imagem
+anotada num PDF para responder está documentado como suportado. Continua fora de alcance
+*mostrar* o screenshot original dentro da resposta, que era o requisito §6.
 
 ### 4.3 Decisões por tomar
 
@@ -174,18 +179,44 @@ da resposta, com a página de origem, continua fora de alcance — e era esse o 
 
 ### 4.5 O que esta direção não vai dar
 
-Registado no `SHAREPOINT.md` §3, repetido aqui porque é fácil esquecer:
+**Esta lista encolheu duas vezes**, nas duas por eu ter sido categórico a mais, e a versão
+atual muda a avaliação global da abordagem:
 
-- citar a página exata e abrir o documento nela — **não atingível**
-- mostrar o screenshot original da documentação — **não atingível**
-- comparar automaticamente o que mudou entre releases — **não atingível** (mitigável
-  escrevendo o documento de alterações à mão)
-- garantir a recusa quando falta evidência — **melhora, sem garantia**
+| Requisito | Antes | Agora |
+|---|---|---|
+| Citar a página e abrir o documento nela | Não atingível | **Suportado** (Copilot Studio, PDFs via SharePoint) — a validar |
+| Interpretar tabelas e imagens anotadas | Não atingível | **Suportado** — a validar |
+| Mostrar o screenshot original na resposta | Não atingível | Não atingível |
+| Comparar automaticamente releases | Não atingível | Não atingível — mitigável à mão (§7.2) |
+| Garantir a recusa quando falta evidência | Melhora, sem garantia | Melhora; Copilot Studio dá mais controlo que o Agent Builder |
 
-As três primeiras exigem indexar por página, extrair imagens com contexto e alinhar secções
-entre versões. Nenhuma é acessível a partir de instruções, porque não são falhas de
-comportamento — são falhas da camada de recuperação, que nesta abordagem pertence à
-Microsoft.
+Dos requisitos que eu dava por perdidos, **dois estão ao alcance**. A distância entre o que
+o briefing original pedia e o que esta abordagem pode dar é substancialmente menor do que
+este documento afirmava há dois dias.
+
+**Consequência para as decisões:** as citações por página dependem do Copilot Studio. A
+pergunta do licenciamento deixa de ser um detalhe sobre o agente e passa a determinar se o
+requisito mais valioso do briefing está ou não disponível.
+
+### 4.6 Existe uma terceira via, que não estava a ser considerada
+
+O Copilot Studio permite ligar uma **fonte de conhecimento própria**, servida por uma API de
+pesquisa da organização:
+
+| | Interface | Recuperação |
+|---|---|---|
+| A | Copilot | Microsoft |
+| B | Aplicação própria | Própria |
+| **C** | **Copilot** | **Própria** |
+
+Importa porque, se as experiências mostrarem *"funciona bem, exceto na distinção entre
+releases"*, é possível substituir apenas a peça que falha, mantendo a interface que todos já
+usam.
+
+E muda o estatuto do trabalho parado: **o desenho da camada de recuperação em
+`ARCHITECTURE.md` deixa de ser um plano B abandonado e passa a ser um componente possível da
+opção C.** Consciência de versões, citações com página e recuperação híbrida são exatamente
+o que uma fonte de conhecimento própria teria de fazer.
 
 ---
 
