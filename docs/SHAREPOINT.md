@@ -167,3 +167,106 @@ com dados em vez de opiniões.
 
 O passo 1 antes do passo 2 é deliberado: sem uma medição inicial, não saberão o que as
 mudanças trouxeram, e a discussão volta a ser de opinião.
+
+---
+
+## 7. Escrever os documentos que faltam
+
+Ideia adaptada de uma proposta de "camada de reflexão" para sistemas RAG: sintetizar
+previamente informação dispersa, para que a pesquisa encontre **um** documento bom em vez
+de seis fragmentos desconexos.
+
+Na versão automatizada, um LLM escreve essas sínteses e elas são indexadas com prioridade.
+Isso é perigoso — texto gerado passa a ser tratado como fonte, os erros ficam guardados e
+promovidos, e não há forma de saber que uma síntese ficou desatualizada quando o documento
+de origem mudou.
+
+**No SharePoint a mesma ideia é segura, porque a síntese é escrita e revista por uma
+pessoa, e versionada como qualquer outro documento.** O Copilot indexa-a como indexa tudo
+o resto. O efeito é o mesmo; o risco desaparece.
+
+O que vale a pena escrever, por ordem de retorno:
+
+**7.1 Uma página de visão geral por sistema ou processo.** Meia página: o que é, quando se
+usa, quais são os documentos relevantes e para que serve cada um. Responde às perguntas
+panorâmicas que hoje devolvem fragmentos soltos, e serve de mapa para as outras.
+
+**7.2 Um documento de alterações por release.** O que mudou na 7.4 face à 7.3, em linguagem
+de quem usa: "a confirmação manual no check-in ADL foi removida". Isto responde à pergunta
+que nenhum retriever consegue responder sozinho, porque exige comparar dois documentos que
+nunca estão ambos no resultado.
+
+**7.3 Um glossário de acrónimos e estados.** ADL, PNL, `NOT PROCESSED`, códigos de erro —
+cada um com o significado e o documento onde é tratado a sério. Barato de escrever e
+melhora a recuperação de tudo o resto, porque dá ao sistema uma ponte entre o vocabulário
+das pessoas e o dos manuais.
+
+**7.4 Um FAQ a partir das perguntas reais.** À medida que reunirem as perguntas para a
+avaliação (`EVALUATION.md`), as que o Copilot falha repetidamente são candidatas a um
+documento próprio. É a forma mais direta de corrigir uma falha: se a resposta não está
+escrita em lado nenhum de forma encontrável, escreva-se.
+
+Regra para todos: **são documentos normais, com `Release`, `Estado` e dono.** Quando a
+release muda, são revistos como os outros. Uma síntese desatualizada é pior do que nenhuma,
+porque parece autoritativa.
+
+---
+
+## 8. Escrever para ser recuperado
+
+O Copilot não lê um documento inteiro para responder — recupera pedaços. A qualidade da
+resposta depende de cada pedaço fazer sentido **sozinho**, fora do documento onde estava.
+É o fator que mais gente desconhece e que mais barato é de corrigir na escrita.
+
+**Cada secção tem de se explicar a si própria.** Um parágrafo que diz *"Clique em Confirmar
+para concluir o processo"* é inútil quando recuperado isolado: que processo, em que ecrã,
+de que sistema? A versão recuperável é *"Para concluir o check-in ADL, clique em Confirmar
+no ecrã de check-in."* Repetir o nome do sistema e do procedimento em cada secção parece
+redundante a ler o documento de fio a pavio, e é exatamente o que torna o pedaço
+encontrável e utilizável.
+
+**A resposta vem primeiro, o contexto depois.** Uma secção que começa com três parágrafos
+de enquadramento antes de dizer o que fazer perde-se no corte. Primeiro a instrução, depois
+a explicação.
+
+**Cabeçalhos a sério.** Estilos do Word, não texto a negrito. São eles que delimitam as
+secções; sem eles, o documento é cortado a meio de procedimentos.
+
+**Uma pergunta como cabeçalho funciona melhor do que um substantivo.** "Como fazer o
+check-in ADL" é encontrado por mais formulações do que "Procedimento de check-in".
+
+**Documentos grandes recuperam pior do que documentos focados.** Um manual de 400 páginas
+sobre oito assuntos compete consigo próprio: vários pedaços parecidos, nenhum claramente
+melhor. Oito documentos de 50 páginas recuperam melhor do que um de 400. Quando for viável
+dividir, divida.
+
+**Duplicados dividem o sinal.** Duas versões quase iguais do mesmo procedimento fazem o
+sistema hesitar entre elas e às vezes escolher a pior. Um documento por assunto.
+
+**Tabelas com cabeçalhos repetidos em cada página**, e evitar tabelas que atravessam várias
+páginas quando possível — uma tabela cortada perde os cabeçalhos e as linhas ficam
+ininterpretáveis.
+
+**Legendas nas imagens.** Sem legenda, uma imagem é invisível. *"Figura 4 — Ecrã de
+check-in ADL com o campo Estado do PNL"* torna-a encontrável e diz ao sistema o que ela
+mostra.
+
+**PDFs digitalizados precisam de OCR antes de entrar.** Sem texto pesquisável são invisíveis
+— não aparecem mal, simplesmente não existem para o Copilot.
+
+---
+
+## 9. O que não é possível controlar
+
+Para gerir expectativas: o retriever é da Microsoft. Não se escolhe o número de pedaços
+recuperados, nem como são cortados, nem os pesos de ordenação, nem se há reordenação. Todas
+as alavancas estão do lado do **conteúdo e dos metadados**.
+
+É por isso que a secção 1 (arquivar releases antigas) continua a valer mais do que tudo o
+resto junto: não é possível dizer ao Copilot para preferir a release atual — só é possível
+tirar-lhe as outras da frente.
+
+Também não se controlam as permissões a partir daqui: o Copilot só devolve a cada pessoa o
+que essa pessoa já podia abrir. Um documento com permissões restritas não aparece nas
+respostas de quem não lhe acede — o que é correto, mas explica respostas incompletas que de
+outra forma parecem inexplicáveis.
